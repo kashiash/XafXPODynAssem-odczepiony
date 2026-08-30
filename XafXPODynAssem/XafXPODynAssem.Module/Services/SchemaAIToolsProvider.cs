@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using DevExpress.ExpressApp;
+using DevExpress.XtraReports.UI;
 using LlmTornado.Chat;
 using LlmTornado.Common;
 using Microsoft.Extensions.AI;
@@ -48,6 +49,9 @@ public sealed class SchemaAIToolsProvider
             // Role tools
             AIFunctionFactory.Create(ListRoles, "list_roles"),
             AIFunctionFactory.Create(SetRolePermissions, "set_role_permissions"),
+            // Report tools
+            AIFunctionFactory.Create(ValidateReportSpec, "validate_report_spec"),
+            AIFunctionFactory.Create(BuildReport, "build_report"),
         };
     }
 
@@ -71,6 +75,10 @@ public sealed class SchemaAIToolsProvider
     {
         public IObjectSpace Os { get; }
         private readonly IServiceScope _scope;
+
+        /// <summary>Dostawca uslug TEGO zakresu. ReportDataProvider.GetReportStorage() rozwiazuje
+        /// IReportStorage, ktory w XAF jest scoped — z roota rzucilby wyjatek o zasiegu.</summary>
+        public IServiceProvider ServiceProvider => _scope.ServiceProvider;
 
         public ScopedObjectSpace(IObjectSpace os, IServiceScope scope)
         {
@@ -888,6 +896,264 @@ public sealed class SchemaAIToolsProvider
         {
             _logger.LogError(ex, "[Tool:set_role_permissions] Error");
             return $"Error setting role permissions: {ex.Message}";
+        }
+    }
+
+    // ==========================================================================
+    // REPORT TOOLS
+    // ==========================================================================
+
+    /// <summary>Wynik walidacji zadania raportu — braki jako dane, nie jako wyjatek.</summary>
+    private sealed record ReportRequestValidation(
+        Type RuntimeType,
+        IReadOnlyList<ReportColumnSpec> Columns,
+        string GroupByPath,
+        string SortByPath,
+        IReadOnlyList<string> Problems)
+    {
+        public bool IsValid => Problems.Count == 0;
+    }
+
+    /// <summary>Wlasciwosci runtime'owego typu, ktore da sie pokazac w komorce raportu.</summary>
+    private static IReadOnlyList<System.Reflection.PropertyInfo> GetReportableProperties(Type type)
+        => type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
+            .Where(p => p.PropertyType.IsPrimitive
+                        || p.PropertyType.IsEnum
+                        || p.PropertyType == typeof(string)
+                        || p.PropertyType == typeof(decimal)
+                        || p.PropertyType == typeof(DateTime)
+                        || p.PropertyType == typeof(Guid)
+                        || Nullable.GetUnderlyingType(p.PropertyType) != null)
+            .Where(p => p.Name != "Oid" && p.Name != "GCRecord" && p.Name != "OptimisticLockField"
+                        && p.Name != "IsDeleted" && p.Name != "Session" && p.Name != "ClassInfo"
+                        && p.Name != "Loading" && p.Name != "IsLoading")
+            .ToList();
+
+    /// <summary>Odnajduje typ encji runtime po nazwie klasy (bez rozroznienia wielkosci liter).</summary>
+    private Type ResolveRuntimeType(string entityName, out string error)
+    {
+        error = null;
+        var runtimeTypes = XafXPODynAssemModule.AssemblyManager.RuntimeTypes;
+
+        if (string.IsNullOrWhiteSpace(entityName))
+        {
+            error = "Error: entityName is required. Available runtime entities: "
+                    + string.Join(", ", runtimeTypes.Select(t => t.Name).OrderBy(n => n));
+            return null;
+        }
+
+        var match = runtimeTypes.FirstOrDefault(t =>
+            string.Equals(t.Name, entityName.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        if (match == null)
+        {
+            error = $"Error: runtime entity '{entityName}' not found. Available: "
+                    + string.Join(", ", runtimeTypes.Select(t => t.Name).OrderBy(n => n))
+                    + ". Only deployed (Runtime) entities can be reported on — "
+                    + "if the entity was just created, deploy the schema first.";
+            return null;
+        }
+        return match;
+    }
+
+    /// <summary>
+    /// Wspolna walidacja dla validate_report_spec i build_report — jedno zrodlo prawdy,
+    /// zeby narzedzia nie mogly sie rozjechac. Naprawia wielkosc liter w nazwach pol.
+    /// </summary>
+    private ReportRequestValidation ValidateReportRequest(
+        string entityName, string fieldPaths, string groupByField, string sortByField)
+    {
+        var problems = new List<string>();
+
+        var type = ResolveRuntimeType(entityName, out var typeError);
+        if (type == null)
+        {
+            problems.Add(typeError);
+            return new ReportRequestValidation(null, Array.Empty<ReportColumnSpec>(), null, null, problems);
+        }
+
+        var available = GetReportableProperties(type);
+        var byName = available.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+
+        // Puste fieldPaths = wszystkie skalarne wlasciwosci (rozsadny domysl zamiast bledu).
+        var requested = (fieldPaths ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (requested.Count == 0)
+            requested = available.Select(p => p.Name).ToList();
+
+        var columns = new List<ReportColumnSpec>();
+        foreach (var raw in requested)
+        {
+            if (byName.TryGetValue(raw, out var prop))
+                columns.Add(new ReportColumnSpec(prop.Name, prop.Name));
+            else
+                problems.Add($"Unknown field '{raw}' on entity '{type.Name}'. Available fields: "
+                             + string.Join(", ", available.Select(p => p.Name)));
+        }
+
+        if (columns.Count == 0 && problems.Count == 0)
+            problems.Add($"Entity '{type.Name}' has no reportable scalar fields.");
+
+        string ResolveOptional(string value, string label)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            if (byName.TryGetValue(value.Trim(), out var prop)) return prop.Name;
+            problems.Add($"Unknown {label} field '{value}' on entity '{type.Name}'. Available fields: "
+                         + string.Join(", ", available.Select(p => p.Name)));
+            return null;
+        }
+
+        var groupPath = ResolveOptional(groupByField, "group-by");
+        var sortPath = ResolveOptional(sortByField, "sort-by");
+
+        return new ReportRequestValidation(type, columns, groupPath, sortPath, problems);
+    }
+
+    [Description("Validate a report request against a runtime entity WITHOUT building anything. " +
+                 "Checks that the entity exists and that every requested field, group-by field and sort-by field " +
+                 "really is a property of it. Call this first when unsure about field names — it lists the available fields.")]
+    private string ValidateReportSpec(
+        [Description("Runtime entity class name to report on, e.g. 'Produkt', 'Faktura'.")] string entityName,
+        [Description("Comma-separated field names for the report columns, e.g. 'NazwaProduktu,CenaJednostkowa'. Empty means all scalar fields.")] string fieldPaths = null,
+        [Description("Field name to group rows by. Optional.")] string groupByField = null,
+        [Description("Field name to sort rows by. Optional.")] string sortByField = null)
+    {
+        _logger.LogInformation("[Tool:validate_report_spec] Called with entity={Entity}, fields={Fields}",
+            entityName, fieldPaths);
+        try
+        {
+            var validation = ValidateReportRequest(entityName, fieldPaths, groupByField, sortByField);
+
+            var sb = new StringBuilder();
+            if (!validation.IsValid)
+            {
+                sb.AppendLine($"Report spec is NOT valid — {validation.Problems.Count} problem(s):");
+                foreach (var p in validation.Problems) sb.AppendLine($"- {p}");
+                _logger.LogInformation("[Tool:validate_report_spec] Invalid, {Count} problem(s)",
+                    validation.Problems.Count);
+                return sb.ToString();
+            }
+
+            sb.AppendLine($"Report spec is valid for entity '{validation.RuntimeType.Name}'.");
+            sb.AppendLine($"- Columns ({validation.Columns.Count}): {string.Join(", ", validation.Columns.Select(c => c.Path))}");
+            sb.AppendLine($"- Group by: {validation.GroupByPath ?? "(none)"}");
+            sb.AppendLine($"- Sort by: {validation.SortByPath ?? "(none)"}");
+            sb.AppendLine($"- Default margins: {ReportSpec.DefaultMarginMm} mm on every side, A4 portrait.");
+            sb.AppendLine("Call `build_report` with the same arguments to create it.");
+            _logger.LogInformation("[Tool:validate_report_spec] Valid, {Count} column(s)", validation.Columns.Count);
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:validate_report_spec] Error");
+            return $"Error validating report spec: {ex.Message}";
+        }
+    }
+
+    [Description("Build an XtraReport over a runtime entity and save it into ReportDataV2, so the user can open it " +
+                 "in the XAF report designer (Reports navigation item) and run a preview. " +
+                 "Refuses to build when the entity or any field name is unknown — call `validate_report_spec` first if unsure. " +
+                 "Only works for entities already deployed to runtime; a freshly created entity must be deployed first.")]
+    private string BuildReport(
+        [Description("Runtime entity class name to report on, e.g. 'Produkt', 'Faktura'.")] string entityName,
+        [Description("Comma-separated field names for the report columns, e.g. 'NazwaProduktu,CenaJednostkowa'. Empty means all scalar fields.")] string fieldPaths = null,
+        [Description("Report title, shown in the report header and as the report name in the Reports list.")] string title = null,
+        [Description("Field name to group rows by. Optional.")] string groupByField = null,
+        [Description("Field name to sort rows by. Optional.")] string sortByField = null,
+        [Description("Sort descending instead of ascending.")] bool sortDescending = false,
+        [Description("DevExpress criteria filter applied to the data source, e.g. \"CenaJednostkowa > 100\". Optional.")] string filterCriteria = null,
+        [Description("Page orientation: 'Portrait' (default) or 'Landscape'.")] string orientation = "Portrait")
+    {
+        _logger.LogInformation(
+            "[Tool:build_report] Called with entity={Entity}, fields={Fields}, title={Title}, groupBy={Group}, sortBy={Sort}",
+            entityName, fieldPaths, title, groupByField, sortByField);
+        try
+        {
+            var validation = ValidateReportRequest(entityName, fieldPaths, groupByField, sortByField);
+            if (!validation.IsValid)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"Refusing to build the report — {validation.Problems.Count} problem(s):");
+                foreach (var p in validation.Problems) sb.AppendLine($"- {p}");
+                _logger.LogWarning("[Tool:build_report] Refused, {Count} problem(s)", validation.Problems.Count);
+                return sb.ToString();
+            }
+
+            var runtimeType = validation.RuntimeType;
+            var reportTitle = string.IsNullOrWhiteSpace(title) ? $"Raport — {runtimeType.Name}" : title.Trim();
+
+            // Specyfikacja zyje tylko w pamieci: wlasny ObjectSpace, ktorego NIE commitujemy,
+            // wiec ReportSpec nie trafia do bazy (utrwalanie specyfikacji jest poza zakresem).
+            XtraReport report;
+            using (var specScope = CreateObjectSpaceForType(typeof(ReportSpec)))
+            {
+                var spec = specScope.Os.CreateObject<ReportSpec>();
+                spec.Title = reportTitle;
+                spec.FieldPaths = string.Join(",", validation.Columns.Select(c => c.Path));
+                spec.GroupByField = validation.GroupByPath;
+                spec.SortByField = validation.SortByPath;
+                spec.SortDescending = sortDescending;
+                spec.FilterCriteria = string.IsNullOrWhiteSpace(filterCriteria) ? null : filterCriteria.Trim();
+                spec.Orientation = string.Equals(orientation?.Trim(), "Landscape", StringComparison.OrdinalIgnoreCase)
+                    ? ReportOrientation.Landscape
+                    : ReportOrientation.Portrait;
+                spec.Status = ReportSpecStatus.Ready;
+
+                report = ReportSpecBuilder.Build(
+                    spec, runtimeType.FullName, validation.Columns,
+                    validation.GroupByPath, validation.SortByPath);
+                report.Name = reportTitle;
+                // Bez commita — specScope.Dispose() porzuca obiekt.
+            }
+
+            // Materializacja w ReportDataV2 przez kanoniczny magazyn raportow XAF.
+            using var scope = CreateObjectSpaceForType(typeof(DevExpress.Persistent.BaseImpl.ReportDataV2));
+            var reportData = scope.Os.CreateObject<DevExpress.Persistent.BaseImpl.ReportDataV2>();
+            reportData.DisplayName = reportTitle;
+
+            var storage = DevExpress.ExpressApp.ReportsV2.ReportDataProvider.GetReportStorage(scope.ServiceProvider);
+            if (storage == null)
+                return "Error: report storage is not available (ReportsModuleV2 not configured?).";
+
+            storage.SaveReport(reportData, report);
+            scope.Os.CommitChanges();
+
+            var key = scope.Os.GetKeyValue(reportData)?.ToString();
+            var savedDataType = reportData.DataTypeName;
+
+            _logger.LogInformation(
+                "[Tool:build_report] Saved ReportDataV2 key={Key}, DisplayName='{Name}', DataTypeName='{DataType}', columns={Columns}",
+                key, reportTitle, savedDataType, validation.Columns.Count);
+
+            if (string.IsNullOrWhiteSpace(savedDataType))
+            {
+                _logger.LogWarning("[Tool:build_report] DataTypeName is empty — the designer will have nothing to bind.");
+                return $"Report '{reportTitle}' was saved (key {key}), but its data type could not be determined. "
+                       + "Open it in the report designer and set the data source manually.";
+            }
+
+            var result = new StringBuilder();
+            result.AppendLine($"Report **{reportTitle}** built and saved.");
+            result.AppendLine();
+            result.AppendLine($"- Entity: `{runtimeType.Name}` (`{savedDataType}`)");
+            result.AppendLine($"- Columns ({validation.Columns.Count}): {string.Join(", ", validation.Columns.Select(c => c.Path))}");
+            if (validation.GroupByPath != null) result.AppendLine($"- Grouped by: {validation.GroupByPath}");
+            if (validation.SortByPath != null)
+                result.AppendLine($"- Sorted by: {validation.SortByPath} {(sortDescending ? "descending" : "ascending")}");
+            if (!string.IsNullOrWhiteSpace(filterCriteria)) result.AppendLine($"- Filter: `{filterCriteria}`");
+            result.AppendLine($"- Page: A4 {(string.Equals(orientation?.Trim(), "Landscape", StringComparison.OrdinalIgnoreCase) ? "landscape" : "portrait")}, "
+                              + $"{ReportSpec.DefaultMarginMm} mm margins on every side");
+            result.AppendLine($"- Report key: `{key}`");
+            result.AppendLine();
+            result.AppendLine("Open the **Reports** navigation item to preview it or adjust the layout in the designer.");
+            return result.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:build_report] Error");
+            return $"Error building report: {ex.Message}";
         }
     }
 

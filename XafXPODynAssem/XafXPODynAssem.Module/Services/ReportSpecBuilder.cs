@@ -1,6 +1,7 @@
 using System.Drawing;
 using DevExpress.Drawing;
 using DevExpress.ExpressApp.ReportsV2;
+using DevExpress.Persistent.Base.ReportsV2;
 using DevExpress.XtraReports.UI;
 using XafXPODynAssem.Module.BusinessObjects;
 
@@ -49,9 +50,17 @@ namespace XafXPODynAssem.Module.Services
             string groupByPath,
             string sortByPath)
         {
-            // Zrodlo danych ustawia wywolujacy przez ReportDataV2.DataTypeName = runtimeTypeFullName;
-            // XAF podstawia kolekcje sam (ReportDataSourceHelper), raport nie trzyma DataSource.
             var report = new XtraReport();
+
+            // 0) Zrodlo danych. To ONO wnosi typ encji do zapisanego raportu — ReportDataV2.DataTypeName
+            // jest wlasciwoscia TYLKO DO ODCZYTU (reflekcja po DevExpress.Persistent.BaseImpl.Xpo.v26.1:
+            // jest get_DataTypeName, nie ma set_DataTypeName), wiec wywolujacy nie ma jak jej ustawic.
+            // CollectionDataSource zyje w DevExpress.Persistent.Base.ReportsV2 (NIE w
+            // DevExpress.ExpressApp.ReportsV2 — tam jej faktycznie nie ma, stad wczesniejsza pomylka).
+            var dataSource = new CollectionDataSource { ObjectTypeName = runtimeTypeFullName };
+            if (!string.IsNullOrWhiteSpace(spec.FilterCriteria))
+                dataSource.CriteriaString = spec.FilterCriteria;
+            report.DataSource = dataSource;
 
             // 1) Format + orientacja + marginesy PRZED policzeniem szerokości użytecznej.
             report.PaperKind = spec.PaperKind;
@@ -64,9 +73,6 @@ namespace XafXPODynAssem.Module.Services
             // 2) Dopiero teraz szerokość użyteczna — z PaperKind + orientacji − marginesy.
             var usable = report.PageWidthF - report.Margins.Left - report.Margins.Right;
             if (usable < 1) usable = 1;
-
-            if (!string.IsNullOrWhiteSpace(spec.FilterCriteria))
-                report.FilterString = spec.FilterCriteria;
 
             var reportHeader = new ReportHeaderBand { HeightF = 40 };
             reportHeader.Controls.Add(new XRLabel

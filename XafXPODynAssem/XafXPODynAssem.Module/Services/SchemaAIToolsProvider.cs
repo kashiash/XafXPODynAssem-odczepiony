@@ -3,7 +3,10 @@ using System.Text;
 using System.Text.Json;
 using DevExpress.Data.Filtering;
 using DevExpress.ExpressApp;
+using DevExpress.Persistent.Base.ReportsV2;
 using DevExpress.XtraReports.UI;
+using DevExpress.XtraReports.Wizards;
+using DevExpress.XtraReports.Wizards.Templates;
 using LlmTornado.Chat;
 using LlmTornado.Common;
 using Microsoft.Extensions.AI;
@@ -54,6 +57,7 @@ public sealed class SchemaAIToolsProvider
             AIFunctionFactory.Create(ValidateReportSpec, "validate_report_spec"),
             AIFunctionFactory.Create(BuildReport, "build_report"),
             AIFunctionFactory.Create(PreviewReport, "preview_report"),
+            AIFunctionFactory.Create(BuildInvoiceReport, "build_invoice_report"),
         };
     }
 
@@ -1519,6 +1523,316 @@ public sealed class SchemaAIToolsProvider
         sb.AppendLine("- Stopka: numer strony");
 
         return sb.ToString();
+    }
+
+    // ==========================================================================
+    // INVOICE TEMPLATE TOOL
+    // ==========================================================================
+
+    /// <summary>Sloty, ktore MUSZA dostac pole liczbowe — inaczej szablon policzy smiec.</summary>
+    private static readonly HashSet<TemplateFieldKind> NumericSlots = new()
+    {
+        TemplateFieldKind.Quantity, TemplateFieldKind.UnitPrice, TemplateFieldKind.UnitDiscount,
+        TemplateFieldKind.UnitTax, TemplateFieldKind.Discount, TemplateFieldKind.Tax,
+        TemplateFieldKind.DiscountLineTotal, TemplateFieldKind.TaxLineTotal, TemplateFieldKind.LineTotal,
+        TemplateFieldKind.Subtotal, TemplateFieldKind.DiscountTotal, TemplateFieldKind.TaxTotal,
+        TemplateFieldKind.Total,
+    };
+
+    /// <summary>Sloty, ktore MUSZA dostac date.</summary>
+    private static readonly HashSet<TemplateFieldKind> DateSlots = new()
+    {
+        TemplateFieldKind.InvoiceDate, TemplateFieldKind.InvoiceDueDate,
+    };
+
+    private static bool IsNumericType(Type t)
+    {
+        t = Nullable.GetUnderlyingType(t) ?? t;
+        return t == typeof(decimal) || t == typeof(double) || t == typeof(float)
+               || t == typeof(int) || t == typeof(long) || t == typeof(short) || t == typeof(byte);
+    }
+
+    /// <summary>Kategoria slotu wynika z jego nazwy — deterministycznie, bez zgadywania.</summary>
+    private static TemplateFieldCategory CategoryFor(TemplateFieldKind kind)
+    {
+        var n = kind.ToString();
+        if (n.StartsWith("Vendor", StringComparison.Ordinal)) return TemplateFieldCategory.Vendor;
+        if (n.StartsWith("Customer", StringComparison.Ordinal)) return TemplateFieldCategory.Customer;
+        if (n.StartsWith("Invoice", StringComparison.Ordinal)) return TemplateFieldCategory.InvoiceInfo;
+        return TemplateFieldCategory.OrderDetails;
+    }
+
+    /// <summary>Typ konczacy sciezke — potrzebny do walidacji dopasowania slotu do pola.</summary>
+    private static Type ResolvePathType(Type root, string canonicalPath)
+    {
+        var current = root;
+        foreach (var seg in canonicalPath.Split('.', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var prop = current.GetProperty(seg,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.IgnoreCase);
+            if (prop == null) return null;
+            current = prop.PropertyType;
+        }
+        return current;
+    }
+
+    private static XtraReport CreateInvoiceTemplate(string name) => (name ?? "Invoice1").Trim().ToLowerInvariant() switch
+    {
+        "invoice1" or "1" => new InvoiceTemplate1(),
+        "invoice2" or "2" => new InvoiceTemplate2(),
+        "invoice3" or "3" => new InvoiceTemplate3(),
+        "invoice4" or "4" => new InvoiceTemplate4(),
+        "invoice5" or "5" => new InvoiceTemplate5(),
+        "invoice6" or "6" => new InvoiceTemplate6(),
+        "invoice7" or "7" => new InvoiceTemplate7(),
+        "invoice8" or "8" => new InvoiceTemplate8(),
+        "invoice9" or "9" => new InvoiceTemplate9(),
+        _ => null,
+    };
+
+    /// <summary>Rozbija "Slot=wartosc;Slot2=wartosc2" na pary, tolerujac nowe linie.</summary>
+    private static List<(string Slot, string Value)> ParsePairs(string raw)
+    {
+        var result = new List<(string, string)>();
+        foreach (var part in (raw ?? string.Empty).Split(new[] { ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var idx = part.IndexOf('=');
+            if (idx <= 0) continue;
+            result.Add((part.Substring(0, idx).Trim(), part.Substring(idx + 1).Trim()));
+        }
+        return result;
+    }
+
+    [Description("Build a PROFESSIONAL INVOICE document using one of DevExpress's 9 built-in invoice templates " +
+                 "(logo area, BILL TO block, line-item table, automatic line totals and grand total). " +
+                 "Prefer this over `build_report` whenever the user asks for an invoice, bill or order confirmation — " +
+                 "the template computes line totals from Quantity x UnitPrice and the grand total by itself. " +
+                 "You map entity fields onto named slots; you do NOT design a layout. " +
+                 "Slots: VendorName, VendorContactName, VendorAddress, VendorCity, VendorCountry, VendorWebsite, " +
+                 "VendorEmail, VendorPhone, CustomerName, CustomerContactName, CustomerAddress, CustomerCity, " +
+                 "CustomerCountry, InvoiceNumber, InvoiceDate, InvoiceDueDate, ProductName, ProductDescription, " +
+                 "Quantity, UnitPrice, UnitDiscount, UnitTax, Discount, Tax, DiscountLineTotal, TaxLineTotal, " +
+                 "LineTotal, Subtotal, DiscountTotal, TaxTotal, Total.")]
+    private string BuildInvoiceReport(
+        [Description("Runtime entity holding the LINE ITEMS, e.g. 'PozycjaFaktury'. One row = one invoice line.")] string entityName,
+        [Description("Slot-to-field mapping, 'Slot=FieldPath' separated by ';'. Dotted paths across references are allowed. " +
+                     "Example: 'CustomerName=Faktura.Customer.NazwaKlienta;InvoiceNumber=Faktura.NumerFaktury;" +
+                     "InvoiceDate=Faktura.DataWystawienia;ProductName=OpisPozycji;Quantity=Ilosc;UnitPrice=CenaJednostkowa'.")] string mapping,
+        [Description("Fixed text for slots that are not in the data, 'Slot=text' separated by ';'. " +
+                     "Typically the seller: 'VendorName=Moja Firma Sp. z o.o.;VendorCity=Katowice'. Optional.")] string literals = null,
+        [Description("Which template: Invoice1 .. Invoice9. Default Invoice1.")] string templateName = "Invoice1",
+        [Description("DevExpress criteria limiting the rows, e.g. \"Faktura.NumerFaktury = 'FV/2026/08/001'\". Optional.")] string filterCriteria = null,
+        [Description("Currency symbol shown next to amounts. Default 'zl'.")] string currencySymbol = "zl",
+        [Description("Report name saved to the Reports list. Optional.")] string title = null,
+        [Description("Also render sample documents to image files so the user can see the result.")] bool render = true,
+        [Description("Field path separating one invoice from the next, e.g. 'Faktura.NumerFaktury'. Needed to render more than one sample.")] string documentKeyField = null,
+        [Description("How many sample documents to render. Default 1.")] int sampleCount = 1)
+    {
+        _logger.LogInformation(
+            "[Tool:build_invoice_report] Called with entity={Entity}, template={Template}, mapping={Mapping}, literals={Literals}, filter={Filter}, render={Render}, key={Key}, samples={Samples}",
+            entityName, templateName, mapping, literals, filterCriteria, render, documentKeyField, sampleCount);
+        try
+        {
+            var type = ResolveRuntimeType(entityName, out var typeError);
+            if (type == null) { _logger.LogWarning("[Tool:build_invoice_report] Unknown entity"); return typeError; }
+
+            var template = CreateInvoiceTemplate(templateName);
+            if (template == null)
+                return $"Unknown template '{templateName}'. Available: Invoice1 .. Invoice9.";
+
+            var problems = new List<string>();
+            var missing = new List<string>();
+            var fields = new List<TemplateField>();
+            var mapped = new List<string>();
+
+            var pairs = ParsePairs(mapping);
+            if (pairs.Count == 0)
+                missing.Add("MISSING mapping: the user has not said which field feeds which slot. "
+                            + $"Fields available on '{type.Name}': "
+                            + string.Join(", ", GetReportableProperties(type).Select(p => p.Name))
+                            + "; references to go through: "
+                            + string.Join(", ", GetReferenceProperties(type).Select(p => p.Name)));
+
+            foreach (var (slotName, fieldPath) in pairs)
+            {
+                if (!Enum.TryParse<TemplateFieldKind>(slotName, ignoreCase: true, out var kind)
+                    || kind == TemplateFieldKind.None)
+                {
+                    problems.Add($"Unknown slot '{slotName}'. Valid slots: "
+                                 + string.Join(", ", Enum.GetNames<TemplateFieldKind>().Where(n => n != "None")));
+                    continue;
+                }
+
+                var canonical = ResolvePath(type, fieldPath, out var pathError);
+                if (canonical == null) { problems.Add($"Slot '{slotName}': {pathError}"); continue; }
+
+                // Walidacja typu — String wpiety w Quantity ma zostac odrzucony, nie wyrenderowany.
+                var fieldType = ResolvePathType(type, canonical) ?? typeof(string);
+                if (NumericSlots.Contains(kind) && !IsNumericType(fieldType))
+                {
+                    problems.Add($"Slot '{kind}' needs a numeric field, but '{canonical}' is {fieldType.Name}. "
+                                 + "Pick a numeric field (decimal, int, double) or drop this slot.");
+                    continue;
+                }
+                if (DateSlots.Contains(kind) && (Nullable.GetUnderlyingType(fieldType) ?? fieldType) != typeof(DateTime))
+                {
+                    problems.Add($"Slot '{kind}' needs a DateTime field, but '{canonical}' is {fieldType.Name}.");
+                    continue;
+                }
+
+                var tf = new TemplateField(kind, CategoryFor(kind), fieldType);
+                tf.Value = canonical;
+                tf.IsBindingValue = true;
+                fields.Add(tf);
+                mapped.Add($"{kind} <- {canonical}");
+            }
+
+            foreach (var (slotName, text) in ParsePairs(literals))
+            {
+                if (!Enum.TryParse<TemplateFieldKind>(slotName, ignoreCase: true, out var kind)
+                    || kind == TemplateFieldKind.None)
+                {
+                    problems.Add($"Unknown literal slot '{slotName}'.");
+                    continue;
+                }
+                var tf = new TemplateField(kind, CategoryFor(kind), typeof(string));
+                tf.Value = text;
+                tf.IsBindingValue = false;
+                fields.Add(tf);
+                mapped.Add($"{kind} = \"{text}\"");
+            }
+
+            if (problems.Count > 0 || missing.Count > 0)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("Refusing to build the invoice:");
+                foreach (var p in problems) sb.AppendLine($"PROBLEM: {p}");
+                foreach (var m in missing) sb.AppendLine(m);
+                sb.AppendLine();
+                sb.AppendLine(missing.Count > 0
+                    ? "Ask the user about the MISSING item(s) — one clear question at a time. Do NOT guess."
+                    : "Fix the PROBLEM(s) and call this tool again.");
+                _logger.LogWarning("[Tool:build_invoice_report] Refused — {P} problem(s), {M} missing",
+                    problems.Count, missing.Count);
+                return sb.ToString();
+            }
+
+            CriteriaOperator criteria = null;
+            if (!string.IsNullOrWhiteSpace(filterCriteria))
+            {
+                try { criteria = CriteriaOperator.Parse(filterCriteria); }
+                catch (Exception ex)
+                {
+                    return $"The filter `{filterCriteria}` could not be parsed: {ex.Message}\n"
+                           + $"Available fields on '{type.Name}': "
+                           + string.Join(", ", GetReportableProperties(type).Select(p => p.Name));
+                }
+            }
+
+            using var scope = CreateObjectSpaceForType(type);
+            System.Collections.IList all;
+            try { all = scope.Os.GetObjects(type, criteria); }
+            catch (Exception ex)
+            {
+                return $"The filter `{filterCriteria}` could not be executed: {ex.Message}\n"
+                       + $"Available fields on '{type.Name}': "
+                       + string.Join(", ", GetReportableProperties(type).Select(p => p.Name));
+            }
+
+            var rows = all.Cast<object>().ToList();
+            if (rows.Count == 0)
+                return $"No rows of '{type.Name}' match the filter — nothing to put on the invoice.";
+
+            var reportTitle = string.IsNullOrWhiteSpace(title) ? $"Faktura — {type.Name}" : title.Trim();
+            var options = new TemplateOptions { CurrencySymbol = currencySymbol ?? "zl" };
+
+            // Grupowanie na dokumenty — jak w preview_report.
+            string keyPath = null;
+            if (!string.IsNullOrWhiteSpace(documentKeyField))
+            {
+                keyPath = ResolvePath(type, documentKeyField, out var keyError);
+                if (keyPath == null) return $"documentKeyField: {keyError}";
+            }
+            var groups = keyPath == null
+                ? new List<(string Key, List<object> Rows)> { (reportTitle, rows) }
+                : rows.GroupBy(r => FormatCell(ReadPath(r, keyPath), 60))
+                      .Select(g => (Key: g.Key, Rows: g.ToList())).ToList();
+
+            var output = new StringBuilder();
+            output.AppendLine($"**{reportTitle}** — szablon `{templateName}`");
+            output.AppendLine();
+            output.AppendLine("Mapowanie slotów:");
+            foreach (var m in mapped) output.AppendLine($"- {m}");
+            output.AppendLine();
+
+            // Zapis layoutu do ReportDataV2 — zrodlem jest CollectionDataSource, nie zywa lista,
+            // zeby projektant XAF mial co zwiazac.
+            string savedKey = null;
+            {
+                var forSave = new XtraReport { DataSource = groups[0].Rows };
+                new TemplateReportBuilder(forSave, CreateInvoiceTemplate(templateName), fields, options,
+                    ReportUnit.HundredthsOfAnInch).Execute();
+                forSave.Name = reportTitle;
+                forSave.DataSource = new CollectionDataSource { ObjectTypeName = type.FullName };
+
+                using var saveScope = CreateObjectSpaceForType(typeof(DevExpress.Persistent.BaseImpl.ReportDataV2));
+                var reportData = saveScope.Os.CreateObject<DevExpress.Persistent.BaseImpl.ReportDataV2>();
+                reportData.DisplayName = reportTitle;
+                var storage = DevExpress.ExpressApp.ReportsV2.ReportDataProvider.GetReportStorage(saveScope.ServiceProvider);
+                if (storage == null) return "Error: report storage is not available.";
+                storage.SaveReport(reportData, forSave);
+                saveScope.Os.CommitChanges();
+                savedKey = saveScope.Os.GetKeyValue(reportData)?.ToString();
+                _logger.LogInformation(
+                    "[Tool:build_invoice_report] Saved ReportDataV2 key={Key}, DataTypeName='{DataType}'",
+                    savedKey, reportData.DataTypeName);
+                forSave.Dispose();
+            }
+            output.AppendLine($"Zapisano do listy Raporty (klucz `{savedKey}`).");
+
+            if (render)
+            {
+                output.AppendLine();
+                output.AppendLine($"### Wyrenderowane dokumenty ({Math.Min(groups.Count, Math.Max(1, sampleCount))} z {groups.Count})");
+                foreach (var (key, groupRows) in groups.Take(Math.Max(1, sampleCount)))
+                {
+                    var target = new XtraReport { DataSource = groupRows };
+                    try
+                    {
+                        new TemplateReportBuilder(target, CreateInvoiceTemplate(templateName), fields, options,
+                            ReportUnit.HundredthsOfAnInch).Execute();
+                        target.CreateDocument();
+                        if (target.Pages.Count == 0)
+                        {
+                            output.AppendLine($"- **{key}** — dokument pusty (0 stron).");
+                            continue;
+                        }
+                        var safeKey = string.Concat((key ?? "faktura").Select(c => char.IsLetterOrDigit(c) ? c : '-'));
+                        var file = Path.Combine(RenderOutputDirectory,
+                            $"invoice-{safeKey}-{DateTime.Now:HHmmss}.png");
+                        target.ExportToImage(file, DevExpress.Drawing.DXImageFormat.Png);
+                        output.AppendLine($"- **{key}** — {groupRows.Count} pozycji, {target.Pages.Count} str., "
+                                          + $"{new FileInfo(file).Length / 1024} kB → `{file}`");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[Tool:build_invoice_report] Render failed for {Key}", key);
+                        output.AppendLine($"- **{key}** — render nie powiódł się: {ex.Message}");
+                    }
+                    finally { target.Dispose(); }
+                }
+            }
+
+            _logger.LogInformation("[Tool:build_invoice_report] Done — {Fields} slot(s), {Groups} document(s), {Rows} row(s)",
+                fields.Count, groups.Count, rows.Count);
+            return output.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:build_invoice_report] Error");
+            return $"Error building invoice: {ex.Message}";
+        }
     }
 
     // ==========================================================================

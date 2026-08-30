@@ -112,6 +112,9 @@ namespace XafXPODynAssem.Module.Services
             sb.AppendLine("- Typical gaps worth asking about: which entity the rows come from, which fields become columns, which field holds the date, whether an amount should be net or gross, which field separates one document from the next.");
             sb.AppendLine("- Only call `build_report` once the spec has no MISSING items left.");
             sb.AppendLine("- To show the user how a document actually looks, call `preview_report` with render=true, a documentKeyField and headerLines. It returns image files, so the user does not have to open the report designer.");
+            sb.AppendLine("- **Invoices, bills and order confirmations go to `build_invoice_report`, NOT to `build_report`.** It uses DevExpress's ready-made invoice templates (logo area, BILL TO block, line-item table) and computes line totals and the grand total by itself. Your job there is only to map entity fields onto named slots such as CustomerName, InvoiceNumber, InvoiceDate, ProductName, Quantity, UnitPrice.");
+            sb.AppendLine("- For `build_invoice_report`, the entity is the one holding the LINE ITEMS (one row = one invoice line); header data is reached through references, e.g. 'InvoiceNumber=Faktura.NumerFaktury'. Seller details the user typed go into `literals`, e.g. 'VendorName=Moja Firma;VendorCity=Katowice'.");
+            sb.AppendLine("- Use `build_report` only for plain list reports where no invoice template fits.");
             sb.AppendLine();
 
             // Supported field types

@@ -303,28 +303,25 @@ namespace XafXPODynAssem.Module.Services
                 return report;
             }
 
-            var totalWeight = 0.5f + columns.Sum(c => c.Weight);   // 0.5 na kolumne "Lp."
-            var unit = usable / totalWeight;
-
             var head = new ReportHeaderBand { HeightF = 20 };
-            head.Controls.Add(BuildItemsRow(columns, unit, usable, currency, header: true));
+            head.Controls.Add(BuildItemsRow(columns, usable, currency, header: true));
             report.Bands.Add(head);
 
             var detail = new DetailBand { HeightF = 16 };
-            detail.Controls.Add(BuildItemsRow(columns, unit, usable, currency, header: false));
+            detail.Controls.Add(BuildItemsRow(columns, usable, currency, header: false));
             report.Bands.Add(detail);
             return report;
         }
 
         static XRTable BuildItemsRow(
             List<(string Caption, float Weight, InvoiceSlot Slot)> columns,
-            float unit, float usable, string currency, bool header)
+            float usable, string currency, bool header)
         {
             var table = new XRTable { WidthF = usable, HeightF = header ? 18 : 15 };
             var row = new XRTableRow();
             table.Rows.Add(row);
 
-            var lp = NewCell(unit * 0.5f, header, right: true);
+            var lp = NewCell(0.5f, header, right: true);
             if (header) lp.Text = "Lp.";
             else lp.ExpressionBindings.Add(new ExpressionBinding("BeforePrint", "Text", "[DataSource.CurrentRowIndex] + 1"));
             row.Cells.Add(lp);
@@ -333,7 +330,7 @@ namespace XafXPODynAssem.Module.Services
             {
                 var numeric = MoneySlots.Contains(slot.Kind)
                               || slot.Kind is TemplateFieldKind.Quantity or TemplateFieldKind.Discount or TemplateFieldKind.Tax;
-                var cell = NewCell(unit * weight, header, right: numeric);
+                var cell = NewCell(weight, header, right: numeric);
                 if (header) cell.Text = caption;
                 else
                 {
@@ -352,7 +349,7 @@ namespace XafXPODynAssem.Module.Services
             VatSummarySpec vat, float usable, string currency)
         {
             var report = NewSubreport(lineDataSource, backReferencePath);
-            var width = usable * 0.62f;
+            var width = usable * 0.72f;
             var left = usable - width;
 
             var columns = new (string Caption, string Path, bool Money)[]
@@ -410,10 +407,9 @@ namespace XafXPODynAssem.Module.Services
             var row = new XRTableRow();
             table.Rows.Add(row);
 
-            var cellWidth = width / columns.Length;
             foreach (var (caption, path, money) in columns)
             {
-                var cell = NewCell(cellWidth, bold: mode != RowMode.GroupSummary, right: money);
+                var cell = NewCell(1f, bold: mode != RowMode.GroupSummary, right: money);
                 switch (mode)
                 {
                     case RowMode.Header:
@@ -458,9 +454,11 @@ namespace XafXPODynAssem.Module.Services
             return report;
         }
 
-        static XRTableCell NewCell(float width, bool bold, bool right) => new()
+        // Szerokosc kolumny ustawiamy WAGA, nie WidthF: XRTable rozdziela WidthF miedzy
+        // sasiadow i kolumny wychodza w losowych proporcjach (kolumna „Lp." szersza od opisu).
+        static XRTableCell NewCell(float weight, bool bold, bool right) => new()
         {
-            WidthF = width,
+            Weight = weight,
             Font = new DXFont(FontFamily, 8.5f, bold ? DXFontStyle.Bold : DXFontStyle.Regular),
             Padding = new DevExpress.XtraPrinting.PaddingInfo(3, 3, 1, 1),
             BorderColor = Color.Silver,

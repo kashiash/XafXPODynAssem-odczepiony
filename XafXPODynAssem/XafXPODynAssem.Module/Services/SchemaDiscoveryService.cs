@@ -108,16 +108,14 @@ namespace XafXPODynAssem.Module.Services
             // Raporty
             sb.AppendLine("## Reports");
             sb.AppendLine("- When the user dictates a report or document (invoice, order, protocol), NEVER guess the parts they did not specify.");
-            sb.AppendLine("- Call `validate_report_spec` first. If it returns a line starting with MISSING, ask the user ONE specific question about that item and wait for the answer. Do not fill the gap with a default.");
-            sb.AppendLine("- Typical gaps worth asking about: which entity the rows come from, which fields become columns, which field holds the date, whether an amount should be net or gross, which field separates one document from the next.");
-            sb.AppendLine("- Only call `build_report` once the spec has no MISSING items left.");
-            sb.AppendLine("- To show the user how a document actually looks, call `preview_report` with render=true, a documentKeyField and headerLines. It returns image files, so the user does not have to open the report designer.");
-            sb.AppendLine("- **Invoices, bills and order confirmations go to `build_invoice_report`, NOT to `build_report`.**");
+            sb.AppendLine("- **Decide the branch FIRST. If the words invoice / faktura / rachunek / bill / order confirmation appear, or the user names an invoice entity, this is the INVOICE branch: go straight to `build_invoice_report`. Do NOT call `validate_report_spec`, `build_report` or `preview_report` — they are for plain list reports and they will send you down the wrong path.**");
             sb.AppendLine("- For `build_invoice_report`, `entityName` is the INVOICE HEADER entity — the one where one record is one invoice, e.g. 'Faktura'. If the user names that entity, use it; do NOT translate it to the line-item entity. The tool finds the line-item entity by itself (the runtime entity that references the header) and reports which one it picked.");
             sb.AppendLine("- Header slots (CustomerName, InvoiceNumber, InvoiceDate, InvoiceDueDate, Vendor*, Subtotal, TaxTotal, Total) take paths relative to the HEADER entity, e.g. 'InvoiceNumber=NumerFaktury;CustomerName=Customer.NazwaKlienta'. Line-item slots (ProductName, Quantity, UnitPrice, LineTotal, Tax, ...) take paths relative to the LINE ITEM entity, e.g. 'ProductName=OpisPozycji;Ilosc'. Seller details the user typed go into `literals`, e.g. 'VendorName=Moja Firma;VendorCity=Katowice'.");
             sb.AppendLine("- Add the VAT-rate summary table by passing all four of `vatRateField`, `vatNetField`, `vatAmountField`, `vatGrossField` — paths on the LINE ITEM entity, e.g. 'StawkaVat.SymbolStawki', 'WartoscNetto', 'WartoscVat', 'WartoscBrutto'. That table is the only place totals appear, so do not map Subtotal/TaxTotal/Total when you use it.");
             sb.AppendLine("- The resulting report is saved with the HEADER entity as its data type, so it shows up in the „Pokaż na raporcie” action on the invoice views and can be printed from a single invoice record. Passing the line-item entity still works (the tool walks up the reference), but always prefer the header entity.");
-            sb.AppendLine("- Use `build_report` only for plain list reports where no invoice template fits.");
+            sb.AppendLine("- LIST-REPORT branch (everything that is not a document with line items): call `validate_report_spec` first. If it returns a line starting with MISSING, ask the user ONE specific question about that item and wait for the answer. Do not fill the gap with a default.");
+            sb.AppendLine("- Typical gaps worth asking about: which entity the rows come from, which fields become columns, which field holds the date, whether an amount should be net or gross, which field separates one document from the next.");
+            sb.AppendLine("- Only call `build_report` once the spec has no MISSING items left. To show the user how it looks, call `preview_report` with render=true, a documentKeyField and headerLines — it returns image files, so the user does not have to open the report designer.");
             sb.AppendLine();
 
             // Supported field types

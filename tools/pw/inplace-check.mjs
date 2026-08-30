@@ -3,7 +3,7 @@
 import { chromium } from 'playwright';
 
 const OUT = process.env.PW_OUT || '/private/tmp/claude-501/-Users-jacek-Projects-Brekhof/08514d06-b088-4331-8de3-0ed0f18d18bf/scratchpad/pw';
-const BASE = 'https://localhost:5031';
+const BASE = process.env.PW_BASE || 'https://localhost:5031';
 const WANT = process.env.PW_REPORT || null;
 
 const b = await chromium.launch({ headless: true });

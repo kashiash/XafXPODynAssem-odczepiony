@@ -26,7 +26,8 @@ for (let i=0;i<5;i++){ try { await page.locator('tr', { hasText: 'FV/2026/08/001
 await page.waitForTimeout(1200);
 await shot('02-wiersz-zaznaczony');
 
-await page.locator('[data-action-name="Pokaż na raporcie"] button.dxbl-btn-split-dropdown').first().click();
+for (let i=0;i<6;i++){ if (await page.locator('[data-action-name="Pokaż na raporcie"] button.dxbl-btn-split-dropdown').count()) break; console.log('czekam na akcje raportow', i); await page.waitForTimeout(3000); }
+await page.locator('[data-action-name="Pokaż na raporcie"] button.dxbl-btn-split-dropdown').first().click({ timeout: 20000 });
 await page.waitForTimeout(1500);
 await shot('03-menu-raportow');
 const items = await page.evaluate(() => Array.from(

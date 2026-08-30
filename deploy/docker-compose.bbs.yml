@@ -1,0 +1,71 @@
+# Wariant dla serwera BBS (178.217.143.60, kontenery klienckie obok).
+#
+# Rozni sie od docker-compose.yml dwiema rzeczami:
+#  1. NIE ma network_mode: host. Na BBS siec hosta jest zajeta przez cudze
+#     kontenery i nginx, wiec aplikacja idzie na wlasnej sieci bridge, a na
+#     hoscie publikuje tylko 127.0.0.1:8087 (nginx proxuje po localhost).
+#  2. Baza to WLASNY kontener postgres w tej samej sieci — nie wspoldzielona
+#     instancja. Aplikacja laczy sie po nazwie uslugi (xpodyn-db:5432),
+#     wiec nie zalezy od portu opublikowanego na hoscie.
+#
+# Wolumen xpodyn-pgdata jest nazwany i celowo NIE jest zwiazany z cyklem zycia
+# kontenera aplikacji — przebudowa obrazu (np. przejscie Debug -> Release) nie
+# rusza danych ani zasianego uzytkownika Admin.
+#
+# Uruchomienie:
+#   PGPASSWORD=... AZURE_OPENAI_KEY=... docker compose -f docker-compose.bbs.yml up -d
+
+services:
+  xpodyn-db:
+    image: postgres:18
+    container_name: xpodyn-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "${PGPASSWORD:?ustaw PGPASSWORD}"
+      POSTGRES_DB: XafXPODynAssem
+    # Tylko do reczne diagnostyki psql z hosta; aplikacja tego nie uzywa.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - xpodyn-pgdata:/var/lib/postgresql/data
+    networks:
+      - xpodyn-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  xpodyn:
+    image: quantumwizards/xpodyn:latest
+    container_name: xpodyn
+    # 42 = "przeladuj po deploy schematu". on-failure restartuje przy kazdym
+    # kodzie != 0 (wiec i przy 42), limit 5 chroni przed petla crashowa.
+    restart: on-failure:5
+    depends_on:
+      xpodyn-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8087:8080"
+    networks:
+      - xpodyn-net
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      # Bez Development static assets DevExpressa daja 404 — strona zwraca 200,
+      # ale interfejs sie nie renderuje.
+      ASPNETCORE_ENVIRONMENT: "Development"
+      # Zaklada/aktualizuje schemat i dane startowe (obsluga w BlazorApplication).
+      XAF_UPDATE_DB: "1"
+      ConnectionStrings__ConnectionString: "XpoProvider=Postgres;Host=xpodyn-db;Port=5432;Database=XafXPODynAssem;Username=postgres;Password=${PGPASSWORD:?ustaw PGPASSWORD}"
+      AI__DefaultProvider: "openai"
+      AI__Model: "gpt-5.6-luna"
+      AI__BaseUrl: "https://polandcentral.api.cognitive.microsoft.com/openai"
+      AI__ApiKeys__openai: "${AZURE_OPENAI_KEY:?ustaw AZURE_OPENAI_KEY}"
+
+networks:
+  xpodyn-net:
+    name: xpodyn-net
+
+volumes:
+  xpodyn-pgdata:
+    name: xpodyn-pgdata

@@ -27,3 +27,28 @@ zdalna testujemy przez tunel SSH, podajac adres w `PW_BASE`:
 
     ssh -N -L 8087:127.0.0.1:8087 -p 2221 kashiash@178.217.143.60 &
     PW_BASE=http://localhost:8087 node tools/pw/chat.mjs
+
+## przeplyw-commit.mjs — czy „Zmien stan" zapisuje rekord
+
+    PW_ROW=FV/2026/08/002 PW_TRANSITION=Wystawiona node tools/pw/przeplyw-commit.mjs
+
+Skrypt klika przejscie i konczy — swiadomie NIE klika „Zapisz". Stan sprawdzamy
+osobno w bazie:
+
+    psql -d XafXPODynAssem -c 'SELECT "NumerFaktury","Status" FROM "Faktura";'
+
+## raport-faktura-check.mjs — wydruk faktury dwoma drogami
+
+    PW_MODE=inplace PW_REPORT="Faktura FV/2026/08/001" node tools/pw/raport-faktura-check.mjs
+    PW_MODE=lista   PW_REPORT="Faktura FV/2026/08/001" node tools/pw/raport-faktura-check.mjs
+
+`inplace` idzie przez akcje „Pokaz na raporcie" na zaznaczonym wierszu (jeden
+dokument), `lista` otwiera raport z listy Raportow (szablon — po dokumencie na
+kazda fakture).
+
+## raport-strony.mjs — zrzut kazdej strony zapisanego raportu
+
+    PW_KEY=<Oid z ReportDataV2> PW_TAG=po node tools/pw/raport-strony.mjs
+
+Tresc dokumentu jest rysowana w SVG, wiec `innerText` jej nie widzi — dowodem sa
+zrzuty kolejnych stron.

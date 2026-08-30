@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
+using DevExpress.Data.Filtering;
 using DevExpress.ExpressApp;
 using DevExpress.XtraReports.UI;
 using LlmTornado.Chat;
@@ -52,6 +53,7 @@ public sealed class SchemaAIToolsProvider
             // Report tools
             AIFunctionFactory.Create(ValidateReportSpec, "validate_report_spec"),
             AIFunctionFactory.Create(BuildReport, "build_report"),
+            AIFunctionFactory.Create(PreviewReport, "preview_report"),
         };
     }
 
@@ -903,15 +905,21 @@ public sealed class SchemaAIToolsProvider
     // REPORT TOOLS
     // ==========================================================================
 
-    /// <summary>Wynik walidacji zadania raportu — braki jako dane, nie jako wyjatek.</summary>
+    /// <summary>
+    /// Wynik walidacji zadania raportu — braki jako dane, nie jako wyjatek.
+    /// Rozroznia DWIE rzeczy, bo prowadza do roznych zachowan modelu:
+    /// <see cref="Problems"/> to bledy (uzytkownik podal cos, czego nie ma — popraw),
+    /// <see cref="Missing"/> to luki (uzytkownik czegos NIE podal — dopytaj, nie zgaduj).
+    /// </summary>
     private sealed record ReportRequestValidation(
         Type RuntimeType,
         IReadOnlyList<ReportColumnSpec> Columns,
         string GroupByPath,
         string SortByPath,
-        IReadOnlyList<string> Problems)
+        IReadOnlyList<string> Problems,
+        IReadOnlyList<string> Missing)
     {
-        public bool IsValid => Problems.Count == 0;
+        public bool IsValid => Problems.Count == 0 && Missing.Count == 0;
     }
 
     /// <summary>Wlasciwosci runtime'owego typu, ktore da sie pokazac w komorce raportu.</summary>
@@ -929,6 +937,52 @@ public sealed class SchemaAIToolsProvider
                         && p.Name != "IsDeleted" && p.Name != "Session" && p.Name != "ClassInfo"
                         && p.Name != "Loading" && p.Name != "IsLoading")
             .ToList();
+
+    /// <summary>Wlasciwosci referencyjne — po nich da sie zejsc sciezka „Faktura.Customer.NazwaKlienta".</summary>
+    private static IReadOnlyList<System.Reflection.PropertyInfo> GetReferenceProperties(Type type)
+        => type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
+            .Where(p => XafXPODynAssemModule.AssemblyManager.RuntimeTypes.Contains(p.PropertyType))
+            .ToList();
+
+    /// <summary>
+    /// Rozwiazuje sciezke pola — plaska („NumerFaktury") albo przez referencje
+    /// („Faktura.Customer.NazwaKlienta"). Naprawia wielkosc liter na kazdym odcinku.
+    /// Zwraca null i wypelnia <paramref name="error"/>, gdy ktorys odcinek nie istnieje.
+    /// </summary>
+    private static string ResolvePath(Type root, string path, out string error)
+    {
+        error = null;
+        var segments = (path ?? string.Empty).Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0) { error = "empty field path"; return null; }
+
+        var current = root;
+        var canonical = new List<string>();
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var isLast = i == segments.Length - 1;
+            var candidates = isLast
+                ? GetReportableProperties(current).Concat(GetReferenceProperties(current)).ToList()
+                : GetReferenceProperties(current).ToList();
+
+            var prop = candidates.FirstOrDefault(p =>
+                string.Equals(p.Name, segments[i], StringComparison.OrdinalIgnoreCase));
+
+            if (prop == null)
+            {
+                var available = isLast
+                    ? string.Join(", ", GetReportableProperties(current).Select(p => p.Name)
+                        .Concat(GetReferenceProperties(current).Select(p => p.Name + " (reference)")))
+                    : string.Join(", ", GetReferenceProperties(current).Select(p => p.Name));
+                error = $"'{segments[i]}' is not a {(isLast ? "field" : "reference")} of '{current.Name}'. "
+                        + $"Available on '{current.Name}': {available}";
+                return null;
+            }
+            canonical.Add(prop.Name);
+            current = prop.PropertyType;
+        }
+        return string.Join(".", canonical);
+    }
 
     /// <summary>Odnajduje typ encji runtime po nazwie klasy (bez rozroznienia wielkosci liter).</summary>
     private Type ResolveRuntimeType(string entityName, out string error)
@@ -962,77 +1016,116 @@ public sealed class SchemaAIToolsProvider
     /// zeby narzedzia nie mogly sie rozjechac. Naprawia wielkosc liter w nazwach pol.
     /// </summary>
     private ReportRequestValidation ValidateReportRequest(
-        string entityName, string fieldPaths, string groupByField, string sortByField)
+        string entityName, string fieldPaths, string groupByField, string sortByField,
+        string headerLines = null, string summaryFields = null)
     {
         var problems = new List<string>();
+        var missing = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(entityName))
+        {
+            missing.Add("MISSING entity: the user has not said which entity the report reads from. "
+                        + "Ask them. Available runtime entities: "
+                        + string.Join(", ", XafXPODynAssemModule.AssemblyManager.RuntimeTypes
+                            .Select(t => t.Name).OrderBy(n => n)));
+            return new ReportRequestValidation(null, Array.Empty<ReportColumnSpec>(), null, null, problems, missing);
+        }
 
         var type = ResolveRuntimeType(entityName, out var typeError);
         if (type == null)
         {
             problems.Add(typeError);
-            return new ReportRequestValidation(null, Array.Empty<ReportColumnSpec>(), null, null, problems);
+            return new ReportRequestValidation(null, Array.Empty<ReportColumnSpec>(), null, null, problems, missing);
         }
 
         var available = GetReportableProperties(type);
-        var byName = available.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
 
-        // Puste fieldPaths = wszystkie skalarne wlasciwosci (rozsadny domysl zamiast bledu).
-        var requested = (fieldPaths ?? string.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToList();
+        // Puste fieldPaths NIE jest uzupelniane po cichu — to brak informacji, o ktory model
+        // ma dopytac uzytkownika, a nie dziura do zalatania domyslna wartoscia.
+        var requested = ReportSpecBuilder.ParseList(fieldPaths).ToList();
         if (requested.Count == 0)
-            requested = available.Select(p => p.Name).ToList();
+        {
+            missing.Add($"MISSING columns: the user has not said which fields of '{type.Name}' the report should show. "
+                        + $"Ask them which of these to include: {string.Join(", ", available.Select(p => p.Name))}");
+        }
 
         var columns = new List<ReportColumnSpec>();
         foreach (var raw in requested)
         {
-            if (byName.TryGetValue(raw, out var prop))
-                columns.Add(new ReportColumnSpec(prop.Name, prop.Name));
+            var resolved = ResolvePath(type, raw, out var pathError);
+            if (resolved != null)
+                columns.Add(new ReportColumnSpec(resolved, resolved.Split('.').Last()));
             else
-                problems.Add($"Unknown field '{raw}' on entity '{type.Name}'. Available fields: "
-                             + string.Join(", ", available.Select(p => p.Name)));
+                problems.Add($"Unknown column '{raw}': {pathError}");
         }
 
-        if (columns.Count == 0 && problems.Count == 0)
+        if (requested.Count > 0 && columns.Count == 0 && problems.Count == 0)
             problems.Add($"Entity '{type.Name}' has no reportable scalar fields.");
 
         string ResolveOptional(string value, string label)
         {
             if (string.IsNullOrWhiteSpace(value)) return null;
-            if (byName.TryGetValue(value.Trim(), out var prop)) return prop.Name;
-            problems.Add($"Unknown {label} field '{value}' on entity '{type.Name}'. Available fields: "
-                         + string.Join(", ", available.Select(p => p.Name)));
+            var resolved = ResolvePath(type, value, out var pathError);
+            if (resolved != null) return resolved;
+            problems.Add($"Unknown {label} field '{value}': {pathError}");
             return null;
         }
 
         var groupPath = ResolveOptional(groupByField, "group-by");
         var sortPath = ResolveOptional(sortByField, "sort-by");
 
-        return new ReportRequestValidation(type, columns, groupPath, sortPath, problems);
+        // Naglowek dokumentu: kazde [Pole] musi istniec, inaczej wyrazenie wybuchnie przy renderze.
+        foreach (var line in ReportSpecBuilder.ParseHeaderLines(headerLines))
+            foreach (System.Text.RegularExpressions.Match m in
+                     System.Text.RegularExpressions.Regex.Matches(line, @"\[([^\]]+)\]"))
+            {
+                var resolved = ResolvePath(type, m.Groups[1].Value, out var pathError);
+                if (resolved == null)
+                    problems.Add($"Header line references unknown field '{m.Groups[1].Value}': {pathError}");
+            }
+
+        foreach (var field in ReportSpecBuilder.ParseList(summaryFields))
+        {
+            var resolved = ResolvePath(type, field, out var pathError);
+            if (resolved == null) problems.Add($"Summary field '{field}' is unknown: {pathError}");
+        }
+
+        return new ReportRequestValidation(type, columns, groupPath, sortPath, problems, missing);
     }
 
-    [Description("Validate a report request against a runtime entity WITHOUT building anything. " +
-                 "Checks that the entity exists and that every requested field, group-by field and sort-by field " +
-                 "really is a property of it. Call this first when unsure about field names — it lists the available fields.")]
+    [Description("Validate a report request WITHOUT building anything. Returns two different kinds of feedback " +
+                 "that you MUST treat differently: 'PROBLEM' means the user named something that does not exist — " +
+                 "correct it. 'MISSING' means the user never specified something — ASK THE USER ONE SPECIFIC QUESTION " +
+                 "about it and wait for the answer. Never invent a value for a MISSING item and never silently fall back " +
+                 "to a default. Call this before `build_report` whenever the user's request was vague.")]
     private string ValidateReportSpec(
-        [Description("Runtime entity class name to report on, e.g. 'Produkt', 'Faktura'.")] string entityName,
-        [Description("Comma-separated field names for the report columns, e.g. 'NazwaProduktu,CenaJednostkowa'. Empty means all scalar fields.")] string fieldPaths = null,
-        [Description("Field name to group rows by. Optional.")] string groupByField = null,
-        [Description("Field name to sort rows by. Optional.")] string sortByField = null)
+        [Description("Runtime entity class name the rows come from, e.g. 'Produkt', 'PozycjaFaktury'.")] string entityName,
+        [Description("Comma-separated column paths, e.g. 'OpisPozycji,Ilosc,WartoscBrutto'. Dotted paths across references are allowed, e.g. 'Faktura.NumerFaktury'.")] string fieldPaths = null,
+        [Description("Field path to group rows by. Optional.")] string groupByField = null,
+        [Description("Field path to sort rows by. Optional.")] string sortByField = null,
+        [Description("Document header lines, separated by '|'. Use [FieldPath] to insert data, e.g. 'Faktura nr [Faktura.NumerFaktury]|Nabywca: [Faktura.Customer.NazwaKlienta]'. Optional.")] string headerLines = null,
+        [Description("Comma-separated numeric field paths to total below the table, e.g. 'WartoscNetto,WartoscBrutto'. Optional.")] string summaryFields = null)
     {
-        _logger.LogInformation("[Tool:validate_report_spec] Called with entity={Entity}, fields={Fields}",
-            entityName, fieldPaths);
+        _logger.LogInformation("[Tool:validate_report_spec] Called with entity={Entity}, fields={Fields}, header={Header}",
+            entityName, fieldPaths, headerLines);
         try
         {
-            var validation = ValidateReportRequest(entityName, fieldPaths, groupByField, sortByField);
+            var validation = ValidateReportRequest(entityName, fieldPaths, groupByField, sortByField,
+                headerLines, summaryFields);
 
             var sb = new StringBuilder();
             if (!validation.IsValid)
             {
-                sb.AppendLine($"Report spec is NOT valid — {validation.Problems.Count} problem(s):");
-                foreach (var p in validation.Problems) sb.AppendLine($"- {p}");
-                _logger.LogInformation("[Tool:validate_report_spec] Invalid, {Count} problem(s)",
-                    validation.Problems.Count);
+                foreach (var p in validation.Problems) sb.AppendLine($"PROBLEM: {p}");
+                foreach (var m in validation.Missing) sb.AppendLine(m);
+                sb.AppendLine();
+                if (validation.Missing.Count > 0)
+                    sb.AppendLine("Ask the user about the MISSING item(s) — one clear question at a time. "
+                                  + "Do NOT guess and do NOT call `build_report` yet.");
+                else
+                    sb.AppendLine("Fix the PROBLEM(s) above, then validate again.");
+                _logger.LogInformation("[Tool:validate_report_spec] Invalid — {Problems} problem(s), {Missing} missing",
+                    validation.Problems.Count, validation.Missing.Count);
                 return sb.ToString();
             }
 
@@ -1057,27 +1150,38 @@ public sealed class SchemaAIToolsProvider
                  "Refuses to build when the entity or any field name is unknown — call `validate_report_spec` first if unsure. " +
                  "Only works for entities already deployed to runtime; a freshly created entity must be deployed first.")]
     private string BuildReport(
-        [Description("Runtime entity class name to report on, e.g. 'Produkt', 'Faktura'.")] string entityName,
-        [Description("Comma-separated field names for the report columns, e.g. 'NazwaProduktu,CenaJednostkowa'. Empty means all scalar fields.")] string fieldPaths = null,
-        [Description("Report title, shown in the report header and as the report name in the Reports list.")] string title = null,
-        [Description("Field name to group rows by. Optional.")] string groupByField = null,
-        [Description("Field name to sort rows by. Optional.")] string sortByField = null,
+        [Description("Runtime entity class name the rows come from, e.g. 'Produkt', 'PozycjaFaktury'.")] string entityName,
+        [Description("Comma-separated column paths, e.g. 'OpisPozycji,Ilosc,WartoscBrutto'. Dotted paths across references are allowed, e.g. 'Faktura.NumerFaktury'.")] string fieldPaths = null,
+        [Description("Report title, shown at the top and as the report name in the Reports list.")] string title = null,
+        [Description("Field path to group rows by. Optional.")] string groupByField = null,
+        [Description("Field path to sort rows by. Optional.")] string sortByField = null,
         [Description("Sort descending instead of ascending.")] bool sortDescending = false,
         [Description("DevExpress criteria filter applied to the data source, e.g. \"CenaJednostkowa > 100\". Optional.")] string filterCriteria = null,
-        [Description("Page orientation: 'Portrait' (default) or 'Landscape'.")] string orientation = "Portrait")
+        [Description("Page orientation: 'Portrait' (default) or 'Landscape'.")] string orientation = "Portrait",
+        [Description("Document header lines, separated by '|'. Use [FieldPath] to insert data from the record, " +
+                     "e.g. 'Faktura nr [Faktura.NumerFaktury]|Data: [Faktura.DataWystawienia]|Nabywca: [Faktura.Customer.NazwaKlienta]'. " +
+                     "This is what turns a plain list into a document (invoice, order, protocol). Optional.")] string headerLines = null,
+        [Description("Comma-separated numeric field paths totalled in a summary band below the table, e.g. 'WartoscNetto,WartoscBrutto'. Optional.")] string summaryFields = null)
     {
         _logger.LogInformation(
-            "[Tool:build_report] Called with entity={Entity}, fields={Fields}, title={Title}, groupBy={Group}, sortBy={Sort}",
-            entityName, fieldPaths, title, groupByField, sortByField);
+            "[Tool:build_report] Called with entity={Entity}, fields={Fields}, title={Title}, groupBy={Group}, sortBy={Sort}, header={Header}, summary={Summary}",
+            entityName, fieldPaths, title, groupByField, sortByField, headerLines, summaryFields);
         try
         {
-            var validation = ValidateReportRequest(entityName, fieldPaths, groupByField, sortByField);
+            var validation = ValidateReportRequest(entityName, fieldPaths, groupByField, sortByField,
+                headerLines, summaryFields);
             if (!validation.IsValid)
             {
                 var sb = new StringBuilder();
-                sb.AppendLine($"Refusing to build the report — {validation.Problems.Count} problem(s):");
-                foreach (var p in validation.Problems) sb.AppendLine($"- {p}");
-                _logger.LogWarning("[Tool:build_report] Refused, {Count} problem(s)", validation.Problems.Count);
+                sb.AppendLine("Refusing to build the report — the spec is not complete:");
+                foreach (var p in validation.Problems) sb.AppendLine($"PROBLEM: {p}");
+                foreach (var m in validation.Missing) sb.AppendLine(m);
+                sb.AppendLine();
+                sb.AppendLine(validation.Missing.Count > 0
+                    ? "Ask the user about the MISSING item(s) — one clear question at a time — then call this tool again. Do NOT guess."
+                    : "Fix the PROBLEM(s) and call this tool again.");
+                _logger.LogWarning("[Tool:build_report] Refused — {Problems} problem(s), {Missing} missing",
+                    validation.Problems.Count, validation.Missing.Count);
                 return sb.ToString();
             }
 
@@ -1096,6 +1200,8 @@ public sealed class SchemaAIToolsProvider
                 spec.SortByField = validation.SortByPath;
                 spec.SortDescending = sortDescending;
                 spec.FilterCriteria = string.IsNullOrWhiteSpace(filterCriteria) ? null : filterCriteria.Trim();
+                spec.HeaderLines = string.IsNullOrWhiteSpace(headerLines) ? null : headerLines.Trim();
+                spec.SummaryFields = string.IsNullOrWhiteSpace(summaryFields) ? null : summaryFields.Trim();
                 spec.Orientation = string.Equals(orientation?.Trim(), "Landscape", StringComparison.OrdinalIgnoreCase)
                     ? ReportOrientation.Landscape
                     : ReportOrientation.Portrait;
@@ -1155,6 +1261,264 @@ public sealed class SchemaAIToolsProvider
             _logger.LogError(ex, "[Tool:build_report] Error");
             return $"Error building report: {ex.Message}";
         }
+    }
+
+    /// <summary>Katalog na wyrenderowane dokumenty — poza repozytorium, kasowalny.</summary>
+    private static string RenderOutputDirectory
+    {
+        get
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "xaf-report-render");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+    }
+
+    /// <summary>Czyta wartosc po sciezce „Faktura.Customer.NazwaKlienta" przez refleksje.</summary>
+    private static object ReadPath(object root, string path)
+    {
+        var current = root;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (current == null) return null;
+            var prop = current.GetType().GetProperty(segment,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.IgnoreCase);
+            if (prop == null) return null;
+            current = prop.GetValue(current);
+        }
+        return current;
+    }
+
+    private static string FormatCell(object value, int maxWidth)
+    {
+        var text = value switch
+        {
+            null => "",
+            DateTime dt => dt.ToString("yyyy-MM-dd"),
+            decimal d => d.ToString("N2"),
+            double d => d.ToString("N2"),
+            _ => value.ToString(),
+        };
+        text = text.Replace("|", "\\|").Replace("\n", " ").Trim();
+        return text.Length > maxWidth ? text.Substring(0, maxWidth - 1) + "…" : text;
+    }
+
+    [Description("Show the ACTUAL DATA of a report as a text table in the chat, and optionally RENDER sample " +
+                 "documents to image files so the user can see what the layout looks like without opening the designer. " +
+                 "Use render=true together with headerLines/summaryFields to preview a document layout (invoice, order). " +
+                 "When renderSamples is used, one separate document is produced per distinct value of documentKeyField, " +
+                 "so the user can check the layout holds across different records — not just one lucky row.")]
+    private string PreviewReport(
+        [Description("Runtime entity class name the rows come from, e.g. 'Produkt', 'PozycjaFaktury'.")] string entityName,
+        [Description("Comma-separated column paths. Dotted paths across references are allowed, e.g. 'Faktura.NumerFaktury'.")] string fieldPaths = null,
+        [Description("DevExpress criteria filter, e.g. \"CenaJednostkowa > 1000\" or \"Miejscowosc = 'Katowice'\". Translate the user's plain-language filter into this syntax. Optional.")] string filterCriteria = null,
+        [Description("Maximum rows to show in the text table. Default 10.")] int maxRows = 10,
+        [Description("Field path to sort by. Optional.")] string sortByField = null,
+        [Description("Sort descending instead of ascending.")] bool sortDescending = false,
+        [Description("Render sample documents to image files in addition to the text table.")] bool render = false,
+        [Description("How many sample documents to render. Default 3.")] int sampleCount = 3,
+        [Description("Field path whose distinct values separate one document from the next, e.g. 'Faktura.NumerFaktury'. Required when rendering more than one sample.")] string documentKeyField = null,
+        [Description("Report title shown at the top of the rendered document.")] string title = null,
+        [Description("Document header lines separated by '|', with [FieldPath] placeholders. Optional.")] string headerLines = null,
+        [Description("Comma-separated numeric field paths totalled below the table. Optional.")] string summaryFields = null)
+    {
+        _logger.LogInformation(
+            "[Tool:preview_report] Called with entity={Entity}, fields={Fields}, filter={Filter}, maxRows={MaxRows}, render={Render}, samples={Samples}, key={Key}",
+            entityName, fieldPaths, filterCriteria, maxRows, render, sampleCount, documentKeyField);
+        try
+        {
+            var validation = ValidateReportRequest(entityName, fieldPaths, null, sortByField,
+                headerLines, summaryFields);
+            if (!validation.IsValid)
+            {
+                var refusal = new StringBuilder();
+                refusal.AppendLine("Cannot preview — the spec is not complete:");
+                foreach (var p in validation.Problems) refusal.AppendLine($"PROBLEM: {p}");
+                foreach (var m in validation.Missing) refusal.AppendLine(m);
+                refusal.AppendLine();
+                refusal.AppendLine(validation.Missing.Count > 0
+                    ? "Ask the user about the MISSING item(s) — one clear question at a time. Do NOT guess."
+                    : "Fix the PROBLEM(s) and call this tool again.");
+                _logger.LogWarning("[Tool:preview_report] Refused — {P} problem(s), {M} missing",
+                    validation.Problems.Count, validation.Missing.Count);
+                return refusal.ToString();
+            }
+
+            var type = validation.RuntimeType;
+            var columns = validation.Columns;
+
+            // Filtr uzytkownika: blad parsowania i blad wykonania traktujemy tak samo —
+            // oddajemy liste pol, zeby model mial z czego poprawic, zamiast rzucac wyjatkiem.
+            CriteriaOperator criteria = null;
+            if (!string.IsNullOrWhiteSpace(filterCriteria))
+            {
+                try { criteria = CriteriaOperator.Parse(filterCriteria); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("[Tool:preview_report] Bad criteria: {Msg}", ex.Message);
+                    return $"The filter `{filterCriteria}` could not be parsed: {ex.Message}\n"
+                           + $"Available fields on '{type.Name}': "
+                           + string.Join(", ", GetReportableProperties(type).Select(p => p.Name))
+                           + "\nReferences you can go through: "
+                           + string.Join(", ", GetReferenceProperties(type).Select(p => p.Name));
+                }
+            }
+
+            using var scope = CreateObjectSpaceForType(type);
+            int totalCount;
+            System.Collections.IList all;
+            try
+            {
+                totalCount = scope.Os.GetObjectsCount(type, criteria);
+                all = scope.Os.GetObjects(type, criteria);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("[Tool:preview_report] Query failed: {Msg}", ex.Message);
+                return $"The filter `{filterCriteria}` could not be executed: {ex.Message}\n"
+                       + $"Available fields on '{type.Name}': "
+                       + string.Join(", ", GetReportableProperties(type).Select(p => p.Name))
+                       + "\nReferences you can go through: "
+                       + string.Join(", ", GetReferenceProperties(type).Select(p => p.Name));
+            }
+
+            var rows = all.Cast<object>().ToList();
+            if (!string.IsNullOrWhiteSpace(validation.SortByPath))
+                rows = (sortDescending
+                    ? rows.OrderByDescending(r => ReadPath(r, validation.SortByPath))
+                    : rows.OrderBy(r => ReadPath(r, validation.SortByPath))).ToList();
+
+            var shown = rows.Take(Math.Max(1, maxRows)).ToList();
+
+            var output = new StringBuilder();
+            output.AppendLine($"**{title ?? $"Podgląd — {type.Name}"}**");
+            if (!string.IsNullOrWhiteSpace(filterCriteria))
+                output.AppendLine($"Filtr: `{filterCriteria}`");
+            output.AppendLine();
+
+            output.AppendLine("| " + string.Join(" | ", columns.Select(c => c.Caption)) + " |");
+            output.AppendLine("|" + string.Join("|", columns.Select(_ => "---")) + "|");
+            foreach (var row in shown)
+                output.AppendLine("| " + string.Join(" | ",
+                    columns.Select(c => FormatCell(ReadPath(row, c.Path), 30))) + " |");
+
+            output.AppendLine();
+            output.AppendLine($"Zwrócono **{shown.Count}** z **{totalCount}** pasujących rekordów.");
+
+            if (render)
+            {
+                output.AppendLine();
+                output.AppendLine(RenderSamples(type, validation, rows, sampleCount, documentKeyField,
+                    title, headerLines, summaryFields, sortDescending, filterCriteria));
+            }
+
+            _logger.LogInformation("[Tool:preview_report] Returned {Shown} of {Total} row(s), rendered={Render}",
+                shown.Count, totalCount, render);
+            return output.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:preview_report] Error");
+            return $"Error previewing report: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Renderuje N przykladowych dokumentow — po jednym na kolejna wartosc klucza dokumentu.
+    /// Dane podstawiamy JAWNIE jako liste obiektow (report.DataSource = lista), zamiast liczyc
+    /// na to, ze CollectionDataSource sam sie rozwiaze poza potokiem zadania XAF. Zapisany
+    /// layout (ReportDataV2) dalej trzyma CollectionDataSource, wiec projektant dziala.
+    /// </summary>
+    private string RenderSamples(
+        Type type, ReportRequestValidation validation, List<object> rows, int sampleCount,
+        string documentKeyField, string title, string headerLines, string summaryFields,
+        bool sortDescending, string filterCriteria)
+    {
+        var sb = new StringBuilder();
+
+        string keyPath = null;
+        if (!string.IsNullOrWhiteSpace(documentKeyField))
+        {
+            keyPath = ResolvePath(type, documentKeyField, out var keyError);
+            if (keyPath == null) return $"Nie wyrenderowano: {keyError}";
+        }
+
+        // Grupujemy wiersze na dokumenty. Bez klucza — jeden dokument ze wszystkich wierszy.
+        var groups = keyPath == null
+            ? new List<(string Key, List<object> Rows)> { ("wszystkie", rows) }
+            : rows.GroupBy(r => FormatCell(ReadPath(r, keyPath), 60))
+                  .Select(g => (Key: g.Key, Rows: g.ToList()))
+                  .ToList();
+
+        var take = Math.Max(1, sampleCount);
+        var selected = groups.Take(take).ToList();
+
+        sb.AppendLine($"### Wyrenderowane dokumenty ({selected.Count} z {groups.Count})");
+        sb.AppendLine();
+
+        foreach (var (key, groupRows) in selected)
+        {
+            XtraReport report;
+            using (var specScope = CreateObjectSpaceForType(typeof(ReportSpec)))
+            {
+                var spec = specScope.Os.CreateObject<ReportSpec>();
+                spec.Title = title ?? $"Dokument — {type.Name}";
+                spec.FieldPaths = string.Join(",", validation.Columns.Select(c => c.Path));
+                spec.SortByField = validation.SortByPath;
+                spec.SortDescending = sortDescending;
+                spec.HeaderLines = headerLines;
+                spec.SummaryFields = summaryFields;
+                spec.Status = ReportSpecStatus.Ready;
+
+                report = ReportSpecBuilder.Build(spec, type.FullName, validation.Columns,
+                    null, validation.SortByPath);
+            }
+
+            // Podmiana zrodla na konkretna liste — to gwarantuje, ze dokument pokazuje
+            // dokladnie te wiersze, ktore wyzej policzylismy i ktore widac w tabelce.
+            report.DataSource = groupRows;
+            report.DataMember = null;
+
+            var safeKey = string.Concat((key ?? "dokument").Select(c => char.IsLetterOrDigit(c) ? c : '-'));
+            var file = Path.Combine(RenderOutputDirectory,
+                $"{type.Name}-{safeKey}-{DateTime.Now:HHmmss}.png");
+
+            try
+            {
+                report.CreateDocument();
+                var pages = report.Pages.Count;
+                if (pages == 0)
+                {
+                    sb.AppendLine($"- **{key}** — dokument pusty (0 stron), nic nie zapisano.");
+                    continue;
+                }
+                report.ExportToImage(file, DevExpress.Drawing.DXImageFormat.Png);
+                var size = new FileInfo(file).Length;
+                sb.AppendLine($"- **{key}** — {groupRows.Count} pozycji, {pages} str., {size / 1024} kB → `{file}`");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Tool:preview_report] Render failed for key {Key}", key);
+                sb.AppendLine($"- **{key}** — render nie powiódł się: {ex.Message}");
+            }
+            finally
+            {
+                report.Dispose();
+            }
+        }
+
+        // Tekstowy opis ukladu — uzytkownik czyta czat, nie otwiera plikow.
+        sb.AppendLine();
+        sb.AppendLine("**Układ dokumentu:**");
+        foreach (var line in ReportSpecBuilder.ParseHeaderLines(headerLines))
+            sb.AppendLine($"- Nagłówek: {line}");
+        sb.AppendLine($"- Tabela pozycji: {string.Join(" | ", validation.Columns.Select(c => c.Caption))}");
+        foreach (var f in ReportSpecBuilder.ParseList(summaryFields))
+            sb.AppendLine($"- Podsumowanie: suma {f}");
+        sb.AppendLine("- Stopka: numer strony");
+
+        return sb.ToString();
     }
 
     // ==========================================================================

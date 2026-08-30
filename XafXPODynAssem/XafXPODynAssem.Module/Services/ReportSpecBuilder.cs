@@ -74,7 +74,13 @@ namespace XafXPODynAssem.Module.Services
             var usable = report.PageWidthF - report.Margins.Left - report.Margins.Right;
             if (usable < 1) usable = 1;
 
-            var reportHeader = new ReportHeaderBand { HeightF = 40 };
+            // Pasmo naglowka: tytul + opcjonalny blok dokumentowy (numer, data, kontrahent...).
+            // Wyrazenia [Pole] i [Referencja.Pole] rozwiazuja sie wzgledem PIERWSZEGO wiersza
+            // zrodla — dlatego dokument renderuje sie na danych zawezonych do jednego rekordu
+            // nadrzednego, a nie na calej tabeli.
+            var headerLines = ParseHeaderLines(spec.HeaderLines);
+            var headerHeight = 40f + headerLines.Count * LineHeight;
+            var reportHeader = new ReportHeaderBand { HeightF = headerHeight };
             reportHeader.Controls.Add(new XRLabel
             {
                 Text = spec.Title ?? "Raport",
@@ -82,6 +88,24 @@ namespace XafXPODynAssem.Module.Services
                 HeightF = 30,
                 Font = new DXFont(FontFamily, 16, DXFontStyle.Bold),
             });
+
+            var lineTop = 34f;
+            foreach (var line in headerLines)
+            {
+                var label = new XRLabel
+                {
+                    TopF = lineTop,
+                    WidthF = usable,
+                    HeightF = LineHeight,
+                    Font = new DXFont(FontFamily, 10),
+                };
+                // Linia bez [Pola] to zwykly tekst; z [Polem] — wyrazenie sklejane z fragmentow.
+                var expression = ToExpression(line);
+                if (expression == null) label.Text = line;
+                else label.ExpressionBindings.Add(new ExpressionBinding("Text", expression));
+                reportHeader.Controls.Add(label);
+                lineTop += LineHeight;
+            }
             report.Bands.Add(reportHeader);
 
             var pageHeader = new PageHeaderBand { HeightF = 26 };
@@ -112,6 +136,30 @@ namespace XafXPODynAssem.Module.Services
             }
             report.Bands.Add(detail);
 
+            // Pasmo podsumowania — sumy pol liczbowych pod tabela (wartosc netto, brutto...).
+            var summary = ParseList(spec.SummaryFields);
+            if (summary.Count > 0)
+            {
+                var summaryBand = new ReportFooterBand { HeightF = 12 + summary.Count * LineHeight };
+                var top = 8f;
+                foreach (var field in summary)
+                {
+                    var label = new XRLabel
+                    {
+                        TopF = top,
+                        WidthF = usable,
+                        HeightF = LineHeight,
+                        TextAlignment = DevExpress.XtraPrinting.TextAlignment.MiddleRight,
+                        Font = new DXFont(FontFamily, 10, DXFontStyle.Bold),
+                    };
+                    label.ExpressionBindings.Add(new ExpressionBinding(
+                        "BeforePrint", "Text", $"'Razem {field}: ' + sumSum([{field}])"));
+                    summaryBand.Controls.Add(label);
+                    top += LineHeight;
+                }
+                report.Bands.Add(summaryBand);
+            }
+
             var pageFooter = new PageFooterBand { HeightF = 20 };
             var pageInfo = new XRPageInfo
             {
@@ -126,6 +174,47 @@ namespace XafXPODynAssem.Module.Services
 
             return report;
         }
+
+        const float LineHeight = 16f;
+
+        /// <summary>Linie naglowka: rozdzielone znakiem nowej linii albo pionowa kreska.</summary>
+        public static IReadOnlyList<string> ParseHeaderLines(string raw)
+            => (raw ?? string.Empty)
+                .Split(new[] { '\n', '\r', '|' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .ToList();
+
+        /// <summary>Lista pol rozdzielona przecinkami.</summary>
+        public static IReadOnlyList<string> ParseList(string raw)
+            => (raw ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+        /// <summary>
+        /// Zamienia „Faktura nr [NumerFaktury]" na wyrazenie XtraReports
+        /// <c>'Faktura nr ' + [NumerFaktury]</c>. Zwraca null, gdy linia nie ma zadnego pola —
+        /// wtedy wywolujacy ustawia zwykly Text (taniej i nie ryzykuje bledu wyrazenia).
+        /// </summary>
+        public static string ToExpression(string line)
+        {
+            var matches = System.Text.RegularExpressions.Regex.Matches(line, @"\[([^\]]+)\]");
+            if (matches.Count == 0) return null;
+
+            var parts = new List<string>();
+            var pos = 0;
+            foreach (System.Text.RegularExpressions.Match m in matches)
+            {
+                if (m.Index > pos)
+                    parts.Add(Quote(line.Substring(pos, m.Index - pos)));
+                parts.Add($"ToStr([{m.Groups[1].Value}])");
+                pos = m.Index + m.Length;
+            }
+            if (pos < line.Length) parts.Add(Quote(line.Substring(pos)));
+            return string.Join(" + ", parts);
+        }
+
+        static string Quote(string text) => "'" + text.Replace("'", "''") + "'";
 
         static XRTable BuildRow(IReadOnlyList<ReportColumnSpec> columns, float usableWidth, bool isHeader)
         {

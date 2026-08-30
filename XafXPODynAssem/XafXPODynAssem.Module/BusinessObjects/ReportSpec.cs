@@ -108,6 +108,31 @@ namespace XafXPODynAssem.Module.BusinessObjects
             set => SetPropertyValue(nameof(FilterCriteria), ref filterCriteria, value);
         }
 
+        // -- Układ dokumentowy (faktura, protokół, zamówienie) ----------------
+        // Raport listowy ma sam nagłówek + tabelę. Dokument ma jeszcze blok nagłówkowy
+        // z polami (numer, data, kontrahent) i podsumowanie pod tabelą.
+
+        string headerLines;
+        [Size(SizeAttribute.Unlimited)]
+        [XafDisplayName("Linie nagłówka dokumentu")]
+        [Description("Po jednej linii na wiersz. Tekst z [NazwaPola] podstawia wartość z rekordu, " +
+                     "np. „Faktura nr [NumerFaktury]”.")]
+        public string HeaderLines
+        {
+            get => headerLines;
+            set => SetPropertyValue(nameof(HeaderLines), ref headerLines, value);
+        }
+
+        string summaryFields;
+        [Size(SizeAttribute.Unlimited)]
+        [XafDisplayName("Pola do podsumowania (po przecinku)")]
+        [Description("Pola liczbowe sumowane w pasmie podsumowania pod tabelą.")]
+        public string SummaryFields
+        {
+            get => summaryFields;
+            set => SetPropertyValue(nameof(SummaryFields), ref summaryFields, value);
+        }
+
         // -- Układ strony ----------------------------------------------------
 
         ReportOrientation orientation;

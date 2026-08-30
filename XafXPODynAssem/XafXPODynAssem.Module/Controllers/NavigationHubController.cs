@@ -135,12 +135,13 @@ namespace XafXPODynAssem.Module.Controllers
                     if (!permittedItemIds.Contains(viewId)) continue;   // samowalidacja
                     if (!alreadyShown.Add(viewId)) continue;            // juz jest statycznie
 
+                    var image = ResolveRuntimeImageName(cc.ClassName);
                     buttons.Add(new HubButtonData
                     {
                         Id = $"Runtime_{cc.ClassName}",
                         Caption = cc.ClassName,
-                        ImageName = "BO_Object",
-                        ImageUrl = ResolveImageUrl("BO_Object"),
+                        ImageName = image,
+                        ImageUrl = ResolveImageUrl(image),
                         NavigationItemId = viewId,
                         Color = RuntimePalette[colorIndex % RuntimePalette.Length],
                         ExternalUrl = string.Empty
@@ -159,6 +160,27 @@ namespace XafXPODynAssem.Module.Controllers
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// Dobiera ikone kafelka encji runtime po nazwie klasy. Encje powstaja w runtime,
+        /// wiec nikt nie przypisze im ikony recznie — zgadujemy po nazwie, a gdy nic nie pasuje,
+        /// wracamy do generycznej ikony klasy. Nazwy obrazow sa z DevExpress.Images.
+        /// </summary>
+        static string ResolveRuntimeImageName(string className)
+        {
+            var n = (className ?? string.Empty).ToLowerInvariant();
+            if (n.Contains("faktur") || n.Contains("invoice")) return "BO_Invoice";
+            if (n.Contains("produkt") || n.Contains("product") || n.Contains("towar")) return "BO_Product";
+            if (n.Contains("klient") || n.Contains("customer") || n.Contains("kontrahent")) return "BO_Customer";
+            if (n.Contains("pracownik") || n.Contains("employee")) return "BO_Employee";
+            if (n.Contains("zamowien") || n.Contains("order")) return "BO_Order";
+            if (n.Contains("kontakt") || n.Contains("contact") || n.Contains("osoba")) return "BO_Contact";
+            if (n.Contains("dzial") || n.Contains("department")) return "BO_Department";
+            if (n.Contains("kategor") || n.Contains("category") || n.Contains("stawka")) return "BO_Category";
+            if (n.Contains("raport") || n.Contains("report")) return "BO_Report";
+            if (n.Contains("notat") || n.Contains("note")) return "BO_Note";
+            return "ModelEditor_Class_Object";
         }
 
         // -- Pozycje nawigacji ----------------------------------------------------

@@ -12,7 +12,7 @@
   <NavigationHub>
     <Item Id="Start" Caption="Start" SortOrder="0" IsNewNode="True">
       <Buttons>
-        <Item Id="AsystentAI" Caption="Asystent AI" ImageName="Actions_EnterGroup"
+        <Item Id="AsystentAI" Caption="Asystent AI" ImageName="Action_AI"
               NavigationItemId="AIChat_ListView" Color="#1976D2" SortOrder="0" IsNewNode="True" />
         <Item Id="Raporty" Caption="Raporty" ImageName="BO_Report"
               NavigationItemId="ReportDataV2_ListView" Color="#00796B" SortOrder="1" IsNewNode="True" />
@@ -20,7 +20,7 @@
     </Item>
     <Item Id="Schemat" Caption="Zarzadzanie schematem" SortOrder="10" IsNewNode="True">
       <Buttons>
-        <Item Id="KlasyUzytkownika" Caption="Klasy uzytkownika" ImageName="BO_Object"
+        <Item Id="KlasyUzytkownika" Caption="Klasy uzytkownika" ImageName="ModelEditor_Class_Object"
               NavigationItemId="CustomClass_ListView" Color="#F57C00" SortOrder="0" IsNewNode="True" />
         <Item Id="HistoriaSchematu" Caption="Historia schematu" ImageName="Action_AboutInfo"
               NavigationItemId="SchemaHistory_ListView" Color="#F57C00" SortOrder="1" IsNewNode="True" />

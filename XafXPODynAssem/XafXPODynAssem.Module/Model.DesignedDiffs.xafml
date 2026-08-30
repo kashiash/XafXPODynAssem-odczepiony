@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" ?>
+<?xml version="1.0" ?>
 <Application Title="XafXPODynAssem">
   <BOModel>
     <Class Name="DevExpress.Persistent.BaseImpl.PermissionPolicy.PermissionPolicyUser" Caption="Base User" />
@@ -9,4 +9,30 @@
   <Views>
     <ListView Id="ApplicationUser_ListView" Caption="Users" />
   </Views>
+  <NavigationHub>
+    <Item Id="Start" Caption="Start" SortOrder="0" IsNewNode="True">
+      <Buttons>
+        <Item Id="AsystentAI" Caption="Asystent AI" ImageName="Actions_EnterGroup"
+              NavigationItemId="AIChat_ListView" Color="#1976D2" SortOrder="0" IsNewNode="True" />
+        <Item Id="Raporty" Caption="Raporty" ImageName="BO_Report"
+              NavigationItemId="ReportDataV2_ListView" Color="#00796B" SortOrder="1" IsNewNode="True" />
+      </Buttons>
+    </Item>
+    <Item Id="Schemat" Caption="Zarzadzanie schematem" SortOrder="10" IsNewNode="True">
+      <Buttons>
+        <Item Id="KlasyUzytkownika" Caption="Klasy uzytkownika" ImageName="BO_Object"
+              NavigationItemId="CustomClass_ListView" Color="#F57C00" SortOrder="0" IsNewNode="True" />
+        <Item Id="HistoriaSchematu" Caption="Historia schematu" ImageName="Action_AboutInfo"
+              NavigationItemId="SchemaHistory_ListView" Color="#F57C00" SortOrder="1" IsNewNode="True" />
+      </Buttons>
+    </Item>
+    <Item Id="Administracja" Caption="Administracja" SortOrder="90" IsNewNode="True">
+      <Buttons>
+        <Item Id="Uzytkownicy" Caption="Uzytkownicy" ImageName="BO_User"
+              NavigationItemId="ApplicationUser_ListView" Color="#7B1FA2" SortOrder="0" IsNewNode="True" />
+        <Item Id="Role" Caption="Role" ImageName="BO_Role"
+              NavigationItemId="PermissionPolicyRole_ListView" Color="#7B1FA2" SortOrder="1" IsNewNode="True" />
+      </Buttons>
+    </Item>
+  </NavigationHub>
 </Application>

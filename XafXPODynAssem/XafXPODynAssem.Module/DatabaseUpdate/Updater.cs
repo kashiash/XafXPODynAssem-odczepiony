@@ -88,6 +88,25 @@ namespace XafXPODynAssem.Module.DatabaseUpdate
             }
             return adminRole;
         }
+        /// <summary>
+        /// Uprawnienia potrzebne do pulpitu: kazdy uzytkownik czyta i zapisuje WYLACZNIE
+        /// swoje wlasne przypiecia (filtr po UserId), plus prawo tworzenia i kasowania —
+        /// kasowanie jest wymagane, bo zmiana kolejnosci przypiec usuwa i odtwarza rekordy.
+        /// </summary>
+        void GrantNavigationHubPermissions(PermissionPolicyRole role)
+        {
+            role.AddObjectPermissionFromLambda<UserHubPreference>(
+                SecurityOperations.ReadWriteAccess + ";" + SecurityOperations.Delete,
+                p => p.UserId == (Guid)CurrentUserIdOperator.CurrentUserId(),
+                SecurityPermissionState.Allow);
+
+            role.AddTypePermissionsRecursively<UserHubPreference>(
+                SecurityOperations.Create, SecurityPermissionState.Allow);
+
+            role.AddNavigationPermission(
+                @"Application/NavigationItems/Items/Default/Items/NavigationHub_NavItem",
+                SecurityPermissionState.Allow);
+        }
         PermissionPolicyRole CreateDefaultRole()
         {
             PermissionPolicyRole defaultRole = ObjectSpace.FirstOrDefault<PermissionPolicyRole>(role => role.Name == "Default");
@@ -106,6 +125,13 @@ namespace XafXPODynAssem.Module.DatabaseUpdate
                 defaultRole.AddTypePermissionsRecursively<ModelDifference>(SecurityOperations.Create, SecurityPermissionState.Allow);
                 defaultRole.AddTypePermissionsRecursively<ModelDifferenceAspect>(SecurityOperations.Create, SecurityPermissionState.Allow);
             }
+
+            // UWAGA: ponizsze nadania celowo stoja POZA blokiem `if`. Wszystko powyzej wykonuje
+            // sie tylko przy PIERWSZYM tworzeniu roli, wiec na istniejacej bazie nowe uprawnienia
+            // nigdy by nie weszly i pulpit bylby niedostepny dla nie-adminow. Nadania sa
+            // idempotentne — XAF nadpisuje istniejace wpisy tym samym stanem.
+            GrantNavigationHubPermissions(defaultRole);
+
             return defaultRole;
         }
     }

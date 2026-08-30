@@ -1,6 +1,7 @@
 using System.Reflection;
 using DevExpress.ExpressApp;
 using DevExpress.ExpressApp.DC;
+using DevExpress.ExpressApp.Model;
 using DevExpress.ExpressApp.Model.Core;
 using DevExpress.ExpressApp.Updating;
 using DevExpress.ExpressApp.Xpo;
@@ -90,6 +91,7 @@ namespace XafXPODynAssem.Module
             AdditionalExportedTypes.Add(typeof(BusinessObjects.CustomField));
             AdditionalExportedTypes.Add(typeof(BusinessObjects.SchemaHistory));
             AdditionalExportedTypes.Add(typeof(BusinessObjects.AIChat));
+            AdditionalExportedTypes.Add(typeof(BusinessObjects.UserHubPreference));
             RequiredModuleTypes.Add(typeof(DevExpress.ExpressApp.SystemModule.SystemModule));
             RequiredModuleTypes.Add(typeof(DevExpress.ExpressApp.Security.SecurityModule));
             RequiredModuleTypes.Add(typeof(DevExpress.ExpressApp.ConditionalAppearance.ConditionalAppearanceModule));
@@ -127,6 +129,15 @@ namespace XafXPODynAssem.Module
             CalculatedPersistentAliasHelper.CustomizeTypesInfo(typesInfo);
         }
 
+        /// <summary>
+        /// Wystawia wezel NavigationHub w modelu aplikacji. Bez tego kategorie i kafelki
+        /// pulpitu nie maja gdzie zamieszkac i konfiguracja w .xafml nie zadziala.
+        /// </summary>
+        public override void ExtendModelInterfaces(ModelInterfaceExtenders extenders)
+        {
+            base.ExtendModelInterfaces(extenders);
+            extenders.Add<IModelApplication, Model.IModelNavigationHubExtension>();
+        }
         public override void AddGeneratorUpdaters(ModelNodesGeneratorUpdaters updaters)
         {
             base.AddGeneratorUpdaters(updaters);

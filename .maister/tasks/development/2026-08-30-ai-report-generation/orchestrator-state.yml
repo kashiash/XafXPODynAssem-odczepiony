@@ -1,0 +1,24 @@
+orchestrator:
+  task:
+    name: ai-report-generation
+    description: Podpiąć generowanie raportów AI (build_report / validate_report_spec) w XafXPODynAssem
+    status: completed
+    created: 2026-08-30T14:39:19Z
+    updated: 2026-08-30T14:39:19Z
+  options:
+    html_output: false          # GATE-0: brak .maister/config.yml -> dashboard pominięty (agent bez przeglądarki operatora)
+    spec_audit_enabled: false   # GATE-6: pominięty, patrz gate-decisions.md
+    e2e_enabled: true           # kryterium sukcesu #3 wymaga weryfikacji w przeglądarce
+    user_docs_enabled: false
+    code_review_enabled: false
+    sequential: true
+  task_context:
+    risk_level: medium
+    task_characteristics:
+      has_reproducible_defect: false   # nie ma defektu do odtworzenia testem — ścieżka nigdy nie istniała
+      modifies_existing_code: true
+      creates_new_entities: true
+      involves_data_operations: true
+      ui_heavy: false                  # brak nowego UI; korzystamy z istniejącego czatu i wbudowanego projektanta XAF
+  completed_phases: [1, 2, 5, 7, 8, 11, 12, 14]
+  failed_phases: []

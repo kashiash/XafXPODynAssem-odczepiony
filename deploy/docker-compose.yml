@@ -1,0 +1,18 @@
+services:
+  xpodyn:
+    build: .
+    image: xpodyn:local
+    container_name: xpodyn
+    # 42 = "przeladuj po deploy schematu". on-failure restartuje przy kazdym
+    # kodzie != 0 (wiec i przy 42), limit 5 chroni przed petla crashowa.
+    restart: on-failure:5
+    # Siec hosta LXC: postgres ma port 5432 wystawiony lokalnie, wiec
+    # laczymy sie po localhost i nie trzeba spinac sieci dockerowych.
+    network_mode: host
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__ConnectionString: "XpoProvider=Postgres;Host=localhost;Port=5432;Database=XafXPODynAssem;Username=postgres;Password=${PGPASSWORD:?ustaw PGPASSWORD}"
+      AI__DefaultProvider: "openai"
+      AI__Model: "gpt-5.6-luna"
+      AI__BaseUrl: "https://polandcentral.api.cognitive.microsoft.com/openai"
+      AI__ApiKeys__openai: "${AZURE_OPENAI_KEY:?ustaw AZURE_OPENAI_KEY}"

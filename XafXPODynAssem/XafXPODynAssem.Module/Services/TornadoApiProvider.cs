@@ -45,7 +45,18 @@ public sealed class TornadoApiProvider : IDisposable
                 throw new InvalidOperationException(
                     "No API keys configured. Add at least one provider key to AI:ApiKeys in appsettings.json.");
 
-            _api = new TornadoApi(providerKeys);
+            // Azure OpenAI wystawia sciezke zgodna z OpenAI, wiec wystarczy nadpisac base URL.
+            if (!string.IsNullOrWhiteSpace(_options.BaseUrl))
+            {
+                var key = _options.ApiKeys.TryGetValue(_options.DefaultProvider ?? "openai", out var k) && !string.IsNullOrWhiteSpace(k)
+                    ? k
+                    : _options.ApiKeys.Values.First(v => !string.IsNullOrWhiteSpace(v));
+                _api = new TornadoApi(new Uri(_options.BaseUrl), key);
+            }
+            else
+            {
+                _api = new TornadoApi(providerKeys);
+            }
             _initialized = true;
             _logger.LogInformation("[TornadoApiProvider] Initialized with {Count} providers", providerKeys.Count);
             return _api;

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <CheckEolTargetFramework>false</CheckEolTargetFramework>
@@ -17,23 +17,34 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="DevExpress.AIIntegration.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.AIIntegration.Blazor.Chat" Version="25.2.3" />
-    <PackageReference Include="DevExpress.Drawing.Skia" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.CodeAnalysis" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Dashboards.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.FileAttachment.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Notifications.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Office.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.ReportsV2.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Scheduler.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Security.Xpo" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Validation.Blazor" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.WebApi" Version="25.2.3" />
+    <PackageReference Include="DevExpress.AIIntegration.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.AIIntegration.Blazor.Chat" Version="26.1.4" />
+    <PackageReference Include="DevExpress.Drawing.Skia" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.CodeAnalysis" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Dashboards.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.FileAttachment.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Notifications.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Office.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.ReportsV2.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Scheduler.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Security.Xpo" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Validation.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.WebApi" Version="26.1.4" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\XafXPODynAssem.Module\XafXPODynAssem.Module.csproj" />
+  </ItemGroup>
+
+  <!-- Polskie zasoby DevExpress (biblioteki satelickie). Ukosniki zwykle, zeby dzialalo
+       tez na Linuksie. Wersja MUSI odpowiadac wersji pakietow DevExpress (26.1). -->
+  <ItemGroup>
+    <Content Include="/Users/jacek/Projects/DX/DevExpressLocalizedResources/26.1/pl/*.resources.dll"
+             Condition="Exists('/Users/jacek/Projects/DX/DevExpressLocalizedResources/26.1/pl')">
+      <Link>pl/%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>pl/%(Filename)%(Extension)</TargetPath>
+    </Content>
   </ItemGroup>
 </Project>

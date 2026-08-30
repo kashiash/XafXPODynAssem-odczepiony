@@ -105,6 +105,15 @@ namespace XafXPODynAssem.Module.Services
             sb.AppendLine("- Field names must be valid C# identifiers and cannot be reserved (Oid, ObjectType, GCRecord, OptimisticLockField).");
             sb.AppendLine();
 
+            // Raporty
+            sb.AppendLine("## Reports");
+            sb.AppendLine("- When the user dictates a report or document (invoice, order, protocol), NEVER guess the parts they did not specify.");
+            sb.AppendLine("- Call `validate_report_spec` first. If it returns a line starting with MISSING, ask the user ONE specific question about that item and wait for the answer. Do not fill the gap with a default.");
+            sb.AppendLine("- Typical gaps worth asking about: which entity the rows come from, which fields become columns, which field holds the date, whether an amount should be net or gross, which field separates one document from the next.");
+            sb.AppendLine("- Only call `build_report` once the spec has no MISSING items left.");
+            sb.AppendLine("- To show the user how a document actually looks, call `preview_report` with render=true, a documentKeyField and headerLines. It returns image files, so the user does not have to open the report designer.");
+            sb.AppendLine();
+
             // Supported field types
             sb.AppendLine("## Supported Field Types");
             foreach (var typeName in SupportedTypes.AllTypeNames)

@@ -1192,31 +1192,23 @@ public sealed class SchemaAIToolsProvider
             var runtimeType = validation.RuntimeType;
             var reportTitle = string.IsNullOrWhiteSpace(title) ? $"Raport — {runtimeType.Name}" : title.Trim();
 
-            // Specyfikacja zyje tylko w pamieci: wlasny ObjectSpace, ktorego NIE commitujemy,
-            // wiec ReportSpec nie trafia do bazy (utrwalanie specyfikacji jest poza zakresem).
-            XtraReport report;
-            using (var specScope = CreateObjectSpaceForType(typeof(ReportSpec)))
+            // Specyfikacja zyje tylko w pamieci — zwykly obiekt, bez ObjectSpace i bez tabeli.
+            var spec = new ReportSpec
             {
-                var spec = specScope.Os.CreateObject<ReportSpec>();
-                spec.Title = reportTitle;
-                spec.FieldPaths = string.Join(",", validation.Columns.Select(c => c.Path));
-                spec.GroupByField = validation.GroupByPath;
-                spec.SortByField = validation.SortByPath;
-                spec.SortDescending = sortDescending;
-                spec.FilterCriteria = string.IsNullOrWhiteSpace(filterCriteria) ? null : filterCriteria.Trim();
-                spec.HeaderLines = string.IsNullOrWhiteSpace(headerLines) ? null : headerLines.Trim();
-                spec.SummaryFields = string.IsNullOrWhiteSpace(summaryFields) ? null : summaryFields.Trim();
-                spec.Orientation = string.Equals(orientation?.Trim(), "Landscape", StringComparison.OrdinalIgnoreCase)
+                Title = reportTitle,
+                SortDescending = sortDescending,
+                FilterCriteria = string.IsNullOrWhiteSpace(filterCriteria) ? null : filterCriteria.Trim(),
+                HeaderLines = string.IsNullOrWhiteSpace(headerLines) ? null : headerLines.Trim(),
+                SummaryFields = string.IsNullOrWhiteSpace(summaryFields) ? null : summaryFields.Trim(),
+                Orientation = string.Equals(orientation?.Trim(), "Landscape", StringComparison.OrdinalIgnoreCase)
                     ? ReportOrientation.Landscape
-                    : ReportOrientation.Portrait;
-                spec.Status = ReportSpecStatus.Ready;
+                    : ReportOrientation.Portrait,
+            };
 
-                report = ReportSpecBuilder.Build(
-                    spec, runtimeType.FullName, validation.Columns,
-                    validation.GroupByPath, validation.SortByPath);
-                report.Name = reportTitle;
-                // Bez commita — specScope.Dispose() porzuca obiekt.
-            }
+            XtraReport report = ReportSpecBuilder.Build(
+                spec, runtimeType.FullName, validation.Columns,
+                validation.GroupByPath, validation.SortByPath);
+            report.Name = reportTitle;
 
             // Materializacja w ReportDataV2 przez kanoniczny magazyn raportow XAF.
             using var scope = CreateObjectSpaceForType(typeof(DevExpress.Persistent.BaseImpl.ReportDataV2));
@@ -1469,21 +1461,16 @@ public sealed class SchemaAIToolsProvider
 
         foreach (var (key, groupRows) in selected)
         {
-            XtraReport report;
-            using (var specScope = CreateObjectSpaceForType(typeof(ReportSpec)))
+            var spec = new ReportSpec
             {
-                var spec = specScope.Os.CreateObject<ReportSpec>();
-                spec.Title = title ?? $"Dokument — {type.Name}";
-                spec.FieldPaths = string.Join(",", validation.Columns.Select(c => c.Path));
-                spec.SortByField = validation.SortByPath;
-                spec.SortDescending = sortDescending;
-                spec.HeaderLines = headerLines;
-                spec.SummaryFields = summaryFields;
-                spec.Status = ReportSpecStatus.Ready;
+                Title = title ?? $"Dokument — {type.Name}",
+                SortDescending = sortDescending,
+                HeaderLines = headerLines,
+                SummaryFields = summaryFields,
+            };
 
-                report = ReportSpecBuilder.Build(spec, type.FullName, validation.Columns,
-                    null, validation.SortByPath);
-            }
+            XtraReport report = ReportSpecBuilder.Build(spec, type.FullName, validation.Columns,
+                null, validation.SortByPath);
 
             // Podmiana zrodla na konkretna liste — to gwarantuje, ze dokument pokazuje
             // dokladnie te wiersze, ktore wyzej policzylismy i ktore widac w tabelce.

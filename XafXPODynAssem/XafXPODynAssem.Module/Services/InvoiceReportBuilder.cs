@@ -88,6 +88,11 @@ namespace XafXPODynAssem.Module.Services
         /// <param name="headerDataSource">Zrodlo dla mastera — CollectionDataSource (zapis) albo zywa lista (render).</param>
         /// <param name="lineDataSource">Zrodlo dla obu podraportow.</param>
         /// <param name="backReferencePath">Sciezka od encji pozycji do naglowka, np. "Faktura".</param>
+        /// <param name="title">
+        /// Staly naglowek DOKUMENTU, np. "Faktura" albo "Faktura VAT". Nie wolno tu wstawiac numeru
+        /// konkretnej faktury: ten sam uklad drukuje sie dla kazdego rekordu, a numer wchodzi obok
+        /// wyrazeniem ze slotu InvoiceNumber. To NIE jest nazwa raportu na liscie Raportow.
+        /// </param>
         /// <param name="orderByPath">Pole porzadkujace dokumenty; null = kolejnosc zrodla.</param>
         public static XtraReport Build(
             object headerDataSource,

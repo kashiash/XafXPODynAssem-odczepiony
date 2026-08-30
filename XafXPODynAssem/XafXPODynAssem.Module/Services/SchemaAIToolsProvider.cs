@@ -1703,9 +1703,14 @@ public sealed class SchemaAIToolsProvider
                      "a header-entity data source.")] string templateName = "Invoice1",
         [Description("DevExpress criteria limiting which records are rendered as samples, evaluated against the " +
                      "entity given in entityName, e.g. \"NumerFaktury = 'FV/2026/08/001'\". It is NOT stored in the " +
-                     "saved report. Optional.")] string filterCriteria = null,
+                     "saved report — the saved layout is a TEMPLATE for every invoice, narrowed at print time by the " +
+                     "\u201aShow in report' action on the selected record. Optional.")] string filterCriteria = null,
         [Description("Currency symbol shown next to amounts. Default 'zl'.")] string currencySymbol = "zl",
-        [Description("Report name saved to the Reports list. Optional.")] string title = null,
+        [Description("Report name in the Reports list only — it never appears on the printed document. " +
+                     "Rebuilding with the same name over the same entity REPLACES the saved report. Optional.")] string title = null,
+        [Description("Caption printed at the top of every document, e.g. 'Faktura VAT' or 'Faktura proforma'. " +
+                     "Default 'Faktura'. It must NOT contain a concrete invoice number — the number is printed " +
+                     "next to it from the InvoiceNumber slot of the document being printed.")] string documentTitle = null,
         [Description("Also render sample documents to image files so the user can see the result.")] bool render = true,
         [Description("Header field the invoices are ordered by on the printout, e.g. 'NumerFaktury'. Optional.")] string documentKeyField = null,
         [Description("How many sample invoices to render. Default 1.")] int sampleCount = 1,
@@ -1716,8 +1721,8 @@ public sealed class SchemaAIToolsProvider
         [Description("VAT summary table — path on the LINE ITEM entity to the gross amount, e.g. 'WartoscBrutto'.")] string vatGrossField = null)
     {
         _logger.LogInformation(
-            "[Tool:build_invoice_report] Called with entity={Entity}, mapping={Mapping}, literals={Literals}, filter={Filter}, render={Render}, order={Key}, samples={Samples}, vat={Vat}",
-            entityName, mapping, literals, filterCriteria, render, documentKeyField, sampleCount, vatRateField);
+            "[Tool:build_invoice_report] Called with entity={Entity}, mapping={Mapping}, literals={Literals}, filter={Filter}, render={Render}, order={Key}, samples={Samples}, vat={Vat}, docTitle={DocTitle}",
+            entityName, mapping, literals, filterCriteria, render, documentKeyField, sampleCount, vatRateField, documentTitle);
         try
         {
             var given = ResolveRuntimeType(entityName, out var typeError);
@@ -1840,6 +1845,10 @@ public sealed class SchemaAIToolsProvider
             }
 
             var reportTitle = string.IsNullOrWhiteSpace(title) ? $"Faktura — {headerType.Name}" : title.Trim();
+            // Nazwa raportu (lista Raportow) i naglowek DOKUMENTU to dwie rozne rzeczy. Naglowek nie moze
+            // niesc numeru jednej faktury, bo zapisany uklad jest szablonem dla wszystkich — numer wchodzi
+            // obok, wyrazeniem z rekordu drukowanej faktury (patrz InvoiceReportBuilder.FillHeader).
+            var documentCaption = string.IsNullOrWhiteSpace(documentTitle) ? "Faktura" : documentTitle.Trim();
             var currency = string.IsNullOrWhiteSpace(currencySymbol) ? "zl" : currencySymbol.Trim();
 
             var output = new StringBuilder();
@@ -1857,15 +1866,26 @@ public sealed class SchemaAIToolsProvider
             // Zrodlem jest CollectionDataSource (master i OBA podraporty), nie zywa lista —
             // inaczej zapisany blob niesie typy CLR, ktorych deserializacja jest zabroniona.
             string savedKey;
+            int replacedReports;
             {
                 var forSave = InvoiceReportBuilder.Build(
                     new CollectionDataSource { ObjectTypeName = headerType.FullName },
                     new CollectionDataSource { ObjectTypeName = lineType.FullName },
-                    shape.BackReferencePath, shape.Slots, vat, reportTitle, currency, orderByPath);
+                    shape.BackReferencePath, shape.Slots, vat, documentCaption, currency, orderByPath);
                 forSave.Name = reportTitle;
 
                 using var saveScope = CreateObjectSpaceForType(typeof(DevExpress.Persistent.BaseImpl.ReportDataV2));
-                var reportData = saveScope.Os.CreateObject<DevExpress.Persistent.BaseImpl.ReportDataV2>();
+                // Nadpisujemy raport o tej samej nazwie NAD TA SAMA ENCJA — inaczej kazde powtorne
+                // wywolanie (a model lubi zbudowac raport, potem drugi raz po potwierdzeniu) zostawia
+                // kolejny blizniaczy wpis na liscie Raportow. Dopasowanie tylko po nazwie porwaloby
+                // raport zbudowany nad inna encja, dlatego w kryterium jest tez typ danych.
+                var sameName = saveScope.Os.GetObjects<DevExpress.Persistent.BaseImpl.ReportDataV2>(
+                        CriteriaOperator.Parse("DisplayName = ? And DataTypeName = ?", reportTitle, headerType.FullName))
+                    .OrderBy(r => saveScope.Os.GetKeyValue(r)?.ToString())
+                    .ToList();
+                var reportData = sameName.FirstOrDefault()
+                                 ?? saveScope.Os.CreateObject<DevExpress.Persistent.BaseImpl.ReportDataV2>();
+                replacedReports = sameName.Count;
                 reportData.DisplayName = reportTitle;
                 var storage = DevExpress.ExpressApp.ReportsV2.ReportDataProvider.GetReportStorage(saveScope.ServiceProvider);
                 if (storage == null) return "Error: report storage is not available.";
@@ -1900,12 +1920,26 @@ public sealed class SchemaAIToolsProvider
             output.AppendLine($"Zapisano do listy Raporty (klucz `{savedKey}`), źródło danych `{headerType.Name}`, "
                               + "oznaczony jako inplace. Odśwież stronę (F5), żeby raport pojawił się w akcji "
                               + "„Pokaż na raporcie” na widoku faktur.");
+            if (replacedReports == 1)
+                output.AppendLine($"Nadpisano istniejący raport o nazwie „{reportTitle}” nad `{headerType.Name}` "
+                                  + "— nowy wpis nie powstał.");
+            else if (replacedReports > 1)
+                output.AppendLine($"UWAGA: na liście było {replacedReports} raportów o nazwie „{reportTitle}” nad "
+                                  + $"`{headerType.Name}`. Nadpisano najstarszy wg klucza (`{savedKey}`); pozostałe "
+                                  + "duplikaty zostały — skasuj je z listy Raportów.");
+            output.AppendLine();
+            output.AppendLine("Zapisany układ jest SZABLONEM dla wszystkich faktur — nagłówek dokumentu bierze numer "
+                              + "z drukowanego rekordu, a zawężenie do jednej faktury robi akcja „Pokaż na raporcie” "
+                              + "na zaznaczonym wierszu."
+                              + (string.IsNullOrWhiteSpace(filterCriteria)
+                                  ? string.Empty
+                                  : $" Filtr `{filterCriteria}` posłużył wyłącznie do wyrenderowania próbek poniżej."));
 
             // --- render próbek ------------------------------------------------------
             if (render)
             {
                 output.AppendLine();
-                var file = RenderInvoiceSamples(headerType, lineType, shape, vat, reportTitle, currency,
+                var file = RenderInvoiceSamples(headerType, lineType, shape, vat, documentCaption, currency,
                     orderByPath, filterCriteria, Math.Max(1, sampleCount), output);
                 _logger.LogInformation("[Tool:build_invoice_report] Rendered sample to {File}", file ?? "<none>");
             }
@@ -1959,7 +1993,7 @@ public sealed class SchemaAIToolsProvider
     /// <summary>Renderuje probki na zywych danych i dopisuje sciezki plikow do <paramref name="output"/>.</summary>
     private string RenderInvoiceSamples(
         Type headerType, Type lineType, InvoiceShape shape, VatSummarySpec vat,
-        string reportTitle, string currency, string orderByPath,
+        string documentCaption, string currency, string orderByPath,
         string filterCriteria, int sampleCount, StringBuilder output)
     {
         using var scope = CreateObjectSpaceForType(headerType);
@@ -2002,7 +2036,7 @@ public sealed class SchemaAIToolsProvider
             .Cast<object>().ToList();
 
         var target = InvoiceReportBuilder.Build(sample, lineRows, shape.BackReferencePath,
-            shape.Slots, vat, reportTitle, currency, orderByPath);
+            shape.Slots, vat, documentCaption, currency, orderByPath);
         try
         {
             target.CreateDocument();

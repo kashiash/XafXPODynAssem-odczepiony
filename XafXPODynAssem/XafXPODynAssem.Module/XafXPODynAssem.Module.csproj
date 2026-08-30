@@ -26,6 +26,7 @@
     <PackageReference Include="DevExpress.ExpressApp.Scheduler" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.Security" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.Security.Xpo" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.StateMachine" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.TreeListEditors" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.Validation" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.ViewVariantsModule" Version="26.1.4" />

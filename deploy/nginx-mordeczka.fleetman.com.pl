@@ -1,10 +1,10 @@
 # XafXPODynAssem — kontener `xpodyn`, 127.0.0.1:8087.
-# Na razie TYLKO HTTP: rekord DNS dynxpo.fleetman.com.pl jeszcze nie istnieje,
+# Na razie TYLKO HTTP: rekord DNS mordeczka.fleetman.com.pl jeszcze nie istnieje,
 # wiec certbot nie ma jak wystawic certyfikatu. Blok `listen 443` dopisac
 # dopiero po wystawieniu certyfikatu (wzorzec: demo.fleetman.com.pl).
 server {
     listen 80;
-    server_name dynxpo.fleetman.com.pl;
+    server_name mordeczka.fleetman.com.pl;
     client_max_body_size 100m;
 
     error_page 502 503 504 /__fleetman_outage.html;

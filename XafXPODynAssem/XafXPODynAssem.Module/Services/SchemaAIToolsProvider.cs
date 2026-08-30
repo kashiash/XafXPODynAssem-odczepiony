@@ -1597,177 +1597,264 @@ public sealed class SchemaAIToolsProvider
         return result;
     }
 
-    [Description("Build a PROFESSIONAL INVOICE document using one of DevExpress's 9 built-in invoice templates " +
-                 "(logo area, BILL TO block, line-item table, automatic line totals and grand total). " +
-                 "Prefer this over `build_report` whenever the user asks for an invoice, bill or order confirmation — " +
-                 "the template computes line totals from Quantity x UnitPrice and the grand total by itself. " +
+    /// <summary>Rozstrzygniecie, ktora encja jest naglowkiem, a ktora pozycja faktury.</summary>
+    private sealed record InvoiceShape(
+        Type HeaderType,
+        Type LineType,
+        string BackReferencePath,
+        List<InvoiceSlot> Slots,
+        List<string> Problems)
+    {
+        public bool IsValid => Problems.Count == 0;
+    }
+
+    /// <summary>Encje runtime majace referencje do <paramref name="parent"/> — kandydaci na pozycje.</summary>
+    private static List<(Type Child, string BackRef)> FindChildEntities(Type parent)
+        => XafXPODynAssemModule.AssemblyManager.RuntimeTypes
+            .SelectMany(t => GetReferenceProperties(t)
+                .Where(p => p.PropertyType == parent)
+                .Select(p => (Child: t, BackRef: p.Name)))
+            .ToList();
+
+    /// <summary>
+    /// Probuje zlozyc mapowanie w model naglowek + pozycje. Sloty z <see cref="InvoiceReportBuilder.LineSlots"/>
+    /// rozwiazuja sie wzgledem encji pozycji, cala reszta wzgledem naglowka.
+    /// Tolerowany jest prefiks nazwy naglowka w sciezce naglowkowej („Faktura.NumerFaktury" na Fakturze).
+    /// </summary>
+    private static InvoiceShape TryShape(
+        Type headerType, Type lineType, string backRef,
+        List<(TemplateFieldKind Kind, string Value, bool IsLiteral)> pairs)
+    {
+        var slots = new List<InvoiceSlot>();
+        var problems = new List<string>();
+
+        foreach (var (kind, value, isLiteral) in pairs)
+        {
+            if (isLiteral) { slots.Add(new InvoiceSlot(kind, value, true)); continue; }
+
+            var isLine = InvoiceReportBuilder.LineSlots.Contains(kind);
+            var root = isLine ? lineType : headerType;
+            var canonical = ResolvePath(root, value, out var error);
+
+            // „Faktura.NumerFaktury" podane przy encji Faktura — zdejmujemy zbedny prefiks.
+            if (canonical == null && !isLine)
+            {
+                var segments = value.Split('.', 2);
+                if (segments.Length == 2
+                    && string.Equals(segments[0].Trim(), headerType.Name, StringComparison.OrdinalIgnoreCase))
+                    canonical = ResolvePath(headerType, segments[1], out error);
+            }
+
+            if (canonical == null)
+            {
+                problems.Add($"Slot '{kind}' ({(isLine ? "line item" : "header")}) — path '{value}' "
+                             + $"does not resolve on '{root.Name}': {error}");
+                continue;
+            }
+
+            var fieldType = ResolvePathType(root, canonical) ?? typeof(string);
+            if (NumericSlots.Contains(kind) && !IsNumericType(fieldType))
+                problems.Add($"Slot '{kind}' needs a numeric field, but '{canonical}' on '{root.Name}' is {fieldType.Name}.");
+            else if (DateSlots.Contains(kind) && (Nullable.GetUnderlyingType(fieldType) ?? fieldType) != typeof(DateTime))
+                problems.Add($"Slot '{kind}' needs a DateTime field, but '{canonical}' on '{root.Name}' is {fieldType.Name}.");
+            else
+                slots.Add(new InvoiceSlot(kind, canonical, false));
+        }
+
+        return new InvoiceShape(headerType, lineType, backRef, slots, problems);
+    }
+
+    [Description("Build a PROFESSIONAL INVOICE document. The report is built OVER THE INVOICE HEADER entity " +
+                 "(one record = one invoice), so it can be printed straight from an invoice record and shows up " +
+                 "in the 'Show in Report' action on the invoice views. Layout: document header (seller, buyer, " +
+                 "number, dates) with a page break before every invoice but the first, then a subreport with the " +
+                 "line items, then a VAT-rate summary table. " +
+                 "Prefer this over `build_report` whenever the user asks for an invoice, bill or order confirmation. " +
                  "You map entity fields onto named slots; you do NOT design a layout. " +
-                 "Slots: VendorName, VendorContactName, VendorAddress, VendorCity, VendorCountry, VendorWebsite, " +
-                 "VendorEmail, VendorPhone, CustomerName, CustomerContactName, CustomerAddress, CustomerCity, " +
-                 "CustomerCountry, InvoiceNumber, InvoiceDate, InvoiceDueDate, ProductName, ProductDescription, " +
-                 "Quantity, UnitPrice, UnitDiscount, UnitTax, Discount, Tax, DiscountLineTotal, TaxLineTotal, " +
-                 "LineTotal, Subtotal, DiscountTotal, TaxTotal, Total.")]
+                 "Header slots (paths relative to the HEADER entity): VendorName, VendorContactName, VendorAddress, " +
+                 "VendorCity, VendorCountry, VendorWebsite, VendorEmail, VendorPhone, CustomerName, " +
+                 "CustomerContactName, CustomerAddress, CustomerCity, CustomerCountry, InvoiceNumber, InvoiceDate, " +
+                 "InvoiceDueDate, Subtotal, DiscountTotal, TaxTotal, Total. " +
+                 "Line-item slots (paths relative to the LINE ITEM entity, which the tool finds by itself): " +
+                 "ProductName, ProductDescription, Quantity, UnitPrice, UnitDiscount, UnitTax, Discount, Tax, " +
+                 "DiscountLineTotal, TaxLineTotal, LineTotal.")]
     private string BuildInvoiceReport(
-        [Description("Runtime entity holding the LINE ITEMS, e.g. 'PozycjaFaktury'. One row = one invoice line.")] string entityName,
-        [Description("Slot-to-field mapping, 'Slot=FieldPath' separated by ';'. Dotted paths across references are allowed. " +
-                     "Example: 'CustomerName=Faktura.Customer.NazwaKlienta;InvoiceNumber=Faktura.NumerFaktury;" +
-                     "InvoiceDate=Faktura.DataWystawienia;ProductName=OpisPozycji;Quantity=Ilosc;UnitPrice=CenaJednostkowa'.")] string mapping,
+        [Description("The INVOICE HEADER entity, e.g. 'Faktura'. One record = one invoice. " +
+                     "The tool finds the line-item entity by itself (a runtime entity referencing this one). " +
+                     "Passing the line-item entity instead still works — the tool then walks up the reference — " +
+                     "but the header entity is what makes the report printable from an invoice record.")] string entityName,
+        [Description("Slot-to-field mapping, 'Slot=FieldPath' separated by ';'. Header slots use paths relative to " +
+                     "the header entity, line-item slots paths relative to the line-item entity. Dotted paths across " +
+                     "references are allowed. Example: 'InvoiceNumber=NumerFaktury;InvoiceDate=DataWystawienia;" +
+                     "CustomerName=Customer.NazwaKlienta;ProductName=OpisPozycji;Quantity=Ilosc;UnitPrice=CenaJednostkowa;" +
+                     "LineTotal=WartoscNetto'.")] string mapping,
         [Description("Fixed text for slots that are not in the data, 'Slot=text' separated by ';'. " +
                      "Typically the seller: 'VendorName=Moja Firma Sp. z o.o.;VendorCity=Katowice'. Optional.")] string literals = null,
-        [Description("Which template: Invoice1 .. Invoice9. Default Invoice1.")] string templateName = "Invoice1",
-        [Description("DevExpress criteria limiting the rows, e.g. \"Faktura.NumerFaktury = 'FV/2026/08/001'\". Optional.")] string filterCriteria = null,
+        [Description("Ignored — kept for backwards compatibility. The layout no longer comes from the DevExpress " +
+                     "invoice templates, because those build a flat report over the line items and cannot carry " +
+                     "a header-entity data source.")] string templateName = "Invoice1",
+        [Description("DevExpress criteria limiting which records are rendered as samples, evaluated against the " +
+                     "entity given in entityName, e.g. \"NumerFaktury = 'FV/2026/08/001'\". It is NOT stored in the " +
+                     "saved report. Optional.")] string filterCriteria = null,
         [Description("Currency symbol shown next to amounts. Default 'zl'.")] string currencySymbol = "zl",
         [Description("Report name saved to the Reports list. Optional.")] string title = null,
         [Description("Also render sample documents to image files so the user can see the result.")] bool render = true,
-        [Description("Field path separating one invoice from the next, e.g. 'Faktura.NumerFaktury'. Needed to render more than one sample.")] string documentKeyField = null,
-        [Description("How many sample documents to render. Default 1.")] int sampleCount = 1)
+        [Description("Header field the invoices are ordered by on the printout, e.g. 'NumerFaktury'. Optional.")] string documentKeyField = null,
+        [Description("How many sample invoices to render. Default 1.")] int sampleCount = 1,
+        [Description("VAT summary table — path on the LINE ITEM entity to the VAT rate label, " +
+                     "e.g. 'StawkaVat.SymbolStawki'. Give all four vat* paths to get the table. Optional.")] string vatRateField = null,
+        [Description("VAT summary table — path on the LINE ITEM entity to the net amount, e.g. 'WartoscNetto'.")] string vatNetField = null,
+        [Description("VAT summary table — path on the LINE ITEM entity to the VAT amount, e.g. 'WartoscVat'.")] string vatAmountField = null,
+        [Description("VAT summary table — path on the LINE ITEM entity to the gross amount, e.g. 'WartoscBrutto'.")] string vatGrossField = null)
     {
         _logger.LogInformation(
-            "[Tool:build_invoice_report] Called with entity={Entity}, template={Template}, mapping={Mapping}, literals={Literals}, filter={Filter}, render={Render}, key={Key}, samples={Samples}",
-            entityName, templateName, mapping, literals, filterCriteria, render, documentKeyField, sampleCount);
+            "[Tool:build_invoice_report] Called with entity={Entity}, mapping={Mapping}, literals={Literals}, filter={Filter}, render={Render}, order={Key}, samples={Samples}, vat={Vat}",
+            entityName, mapping, literals, filterCriteria, render, documentKeyField, sampleCount, vatRateField);
         try
         {
-            var type = ResolveRuntimeType(entityName, out var typeError);
-            if (type == null) { _logger.LogWarning("[Tool:build_invoice_report] Unknown entity"); return typeError; }
+            var given = ResolveRuntimeType(entityName, out var typeError);
+            if (given == null) { _logger.LogWarning("[Tool:build_invoice_report] Unknown entity"); return typeError; }
 
-            var template = CreateInvoiceTemplate(templateName);
-            if (template == null)
-                return $"Unknown template '{templateName}'. Available: Invoice1 .. Invoice9.";
-
-            var problems = new List<string>();
-            var missing = new List<string>();
-            var fields = new List<TemplateField>();
-            var mapped = new List<string>();
-
-            var pairs = ParsePairs(mapping);
-            if (pairs.Count == 0)
-                missing.Add("MISSING mapping: the user has not said which field feeds which slot. "
-                            + $"Fields available on '{type.Name}': "
-                            + string.Join(", ", GetReportableProperties(type).Select(p => p.Name))
-                            + "; references to go through: "
-                            + string.Join(", ", GetReferenceProperties(type).Select(p => p.Name)));
-
-            foreach (var (slotName, fieldPath) in pairs)
+            // --- mapowanie na sloty -------------------------------------------------
+            var pairs = new List<(TemplateFieldKind Kind, string Value, bool IsLiteral)>();
+            var slotProblems = new List<string>();
+            foreach (var (slotName, fieldPath) in ParsePairs(mapping))
             {
-                if (!Enum.TryParse<TemplateFieldKind>(slotName, ignoreCase: true, out var kind)
-                    || kind == TemplateFieldKind.None)
-                {
-                    problems.Add($"Unknown slot '{slotName}'. Valid slots: "
-                                 + string.Join(", ", Enum.GetNames<TemplateFieldKind>().Where(n => n != "None")));
-                    continue;
-                }
-
-                var canonical = ResolvePath(type, fieldPath, out var pathError);
-                if (canonical == null) { problems.Add($"Slot '{slotName}': {pathError}"); continue; }
-
-                // Walidacja typu — String wpiety w Quantity ma zostac odrzucony, nie wyrenderowany.
-                var fieldType = ResolvePathType(type, canonical) ?? typeof(string);
-                if (NumericSlots.Contains(kind) && !IsNumericType(fieldType))
-                {
-                    problems.Add($"Slot '{kind}' needs a numeric field, but '{canonical}' is {fieldType.Name}. "
-                                 + "Pick a numeric field (decimal, int, double) or drop this slot.");
-                    continue;
-                }
-                if (DateSlots.Contains(kind) && (Nullable.GetUnderlyingType(fieldType) ?? fieldType) != typeof(DateTime))
-                {
-                    problems.Add($"Slot '{kind}' needs a DateTime field, but '{canonical}' is {fieldType.Name}.");
-                    continue;
-                }
-
-                var tf = new TemplateField(kind, CategoryFor(kind), fieldType);
-                tf.Value = canonical;
-                tf.IsBindingValue = true;
-                fields.Add(tf);
-                mapped.Add($"{kind} <- {canonical}");
+                if (!Enum.TryParse<TemplateFieldKind>(slotName, ignoreCase: true, out var kind) || kind == TemplateFieldKind.None)
+                    slotProblems.Add($"Unknown slot '{slotName}'. Valid slots: "
+                                     + string.Join(", ", Enum.GetNames<TemplateFieldKind>().Where(n => n != "None")));
+                else pairs.Add((kind, fieldPath, false));
             }
-
             foreach (var (slotName, text) in ParsePairs(literals))
             {
-                if (!Enum.TryParse<TemplateFieldKind>(slotName, ignoreCase: true, out var kind)
-                    || kind == TemplateFieldKind.None)
-                {
-                    problems.Add($"Unknown literal slot '{slotName}'.");
-                    continue;
-                }
-                var tf = new TemplateField(kind, CategoryFor(kind), typeof(string));
-                tf.Value = text;
-                tf.IsBindingValue = false;
-                fields.Add(tf);
-                mapped.Add($"{kind} = \"{text}\"");
+                if (!Enum.TryParse<TemplateFieldKind>(slotName, ignoreCase: true, out var kind) || kind == TemplateFieldKind.None)
+                    slotProblems.Add($"Unknown literal slot '{slotName}'.");
+                else pairs.Add((kind, text, true));
             }
 
-            if (problems.Count > 0 || missing.Count > 0)
+            if (pairs.Count == 0)
+                return "Refusing to build the invoice:\n"
+                       + "MISSING mapping: the user has not said which field feeds which slot.\n"
+                       + DescribeShapeCandidates(given)
+                       + "\nAsk the user about the MISSING item(s) — one clear question at a time. Do NOT guess.";
+            if (slotProblems.Count > 0)
+                return "Refusing to build the invoice:\n"
+                       + string.Join("\n", slotProblems.Select(p => "PROBLEM: " + p))
+                       + "\nFix the PROBLEM(s) and call this tool again.";
+
+            // --- czy podano naglowek, czy pozycje? ----------------------------------
+            var attempts = new List<InvoiceShape>();
+
+            // A) entityName to NAGLOWEK — szukamy encji dzieci wsrod typow runtime.
+            foreach (var (child, backRef) in FindChildEntities(given))
+                attempts.Add(TryShape(given, child, backRef, pairs));
+
+            // B) entityName to POZYCJA (stary kontrakt) — naglowkiem jest jego referencja.
+            foreach (var reference in GetReferenceProperties(given))
+                attempts.Add(TryShape(reference.PropertyType, given, reference.Name, pairs));
+
+            var shape = attempts.FirstOrDefault(a => a.IsValid);
+            if (shape == null)
             {
                 var sb = new StringBuilder();
-                sb.AppendLine("Refusing to build the invoice:");
-                foreach (var p in problems) sb.AppendLine($"PROBLEM: {p}");
-                foreach (var m in missing) sb.AppendLine(m);
+                sb.AppendLine("Refusing to build the invoice — the mapping does not fit any header/line-item pair.");
                 sb.AppendLine();
-                sb.AppendLine(missing.Count > 0
-                    ? "Ask the user about the MISSING item(s) — one clear question at a time. Do NOT guess."
-                    : "Fix the PROBLEM(s) and call this tool again.");
-                _logger.LogWarning("[Tool:build_invoice_report] Refused — {P} problem(s), {M} missing",
-                    problems.Count, missing.Count);
+                sb.AppendLine(DescribeShapeCandidates(given));
+                sb.AppendLine();
+                foreach (var attempt in attempts.Take(6))
+                {
+                    sb.AppendLine($"Tried header='{attempt.HeaderType.Name}', line items='{attempt.LineType.Name}' "
+                                  + $"(joined by {attempt.LineType.Name}.{attempt.BackReferencePath}):");
+                    foreach (var p in attempt.Problems) sb.AppendLine($"  PROBLEM: {p}");
+                }
+                if (attempts.Count == 0)
+                    sb.AppendLine($"PROBLEM: '{given.Name}' has no child entity and no reference to a parent, "
+                                  + "so it cannot be one half of an invoice.");
+                sb.AppendLine();
+                sb.AppendLine("Fix the field paths and call this tool again — header slots take paths on the header "
+                              + "entity, line-item slots paths on the line-item entity. Do NOT switch to `build_report`.");
+                _logger.LogWarning("[Tool:build_invoice_report] Refused — no shape fits");
                 return sb.ToString();
             }
 
-            CriteriaOperator criteria = null;
-            if (!string.IsNullOrWhiteSpace(filterCriteria))
+            var headerType = shape.HeaderType;
+            var lineType = shape.LineType;
+            _logger.LogInformation("[Tool:build_invoice_report] Shape: header={Header}, lines={Line}, backRef={BackRef}",
+                headerType.Name, lineType.Name, shape.BackReferencePath);
+
+            // --- tabelka stawek VAT -------------------------------------------------
+            VatSummarySpec vat = null;
+            var vatNote = (string)null;
+            var vatPaths = new[] { vatRateField, vatNetField, vatAmountField, vatGrossField };
+            if (vatPaths.All(p => !string.IsNullOrWhiteSpace(p)))
             {
-                try { criteria = CriteriaOperator.Parse(filterCriteria); }
-                catch (Exception ex)
+                var resolved = new string[4];
+                var vatProblems = new List<string>();
+                for (var i = 0; i < 4; i++)
                 {
-                    return $"The filter `{filterCriteria}` could not be parsed: {ex.Message}\n"
-                           + $"Available fields on '{type.Name}': "
-                           + string.Join(", ", GetReportableProperties(type).Select(p => p.Name));
+                    resolved[i] = ResolvePath(lineType, vatPaths[i], out var err);
+                    if (resolved[i] == null) vatProblems.Add($"vat field '{vatPaths[i]}': {err}");
                 }
+                if (vatProblems.Count > 0)
+                    return "Refusing to build the invoice:\n"
+                           + string.Join("\n", vatProblems.Select(p => "PROBLEM: " + p))
+                           + $"\nThe VAT summary paths must resolve on the LINE ITEM entity '{lineType.Name}'.";
+                vat = new VatSummarySpec(resolved[0], resolved[1], resolved[2], resolved[3]);
             }
-
-            using var scope = CreateObjectSpaceForType(type);
-            System.Collections.IList all;
-            try { all = scope.Os.GetObjects(type, criteria); }
-            catch (Exception ex)
+            else if (vatPaths.Any(p => !string.IsNullOrWhiteSpace(p)))
             {
-                return $"The filter `{filterCriteria}` could not be executed: {ex.Message}\n"
-                       + $"Available fields on '{type.Name}': "
-                       + string.Join(", ", GetReportableProperties(type).Select(p => p.Name));
+                return "Refusing to build the invoice:\n"
+                       + "PROBLEM: the VAT summary table needs all four paths — vatRateField, vatNetField, "
+                       + "vatAmountField, vatGrossField — or none of them.\n"
+                       + $"Fields on '{lineType.Name}': "
+                       + string.Join(", ", GetReportableProperties(lineType).Select(p => p.Name))
+                       + "; references: " + string.Join(", ", GetReferenceProperties(lineType).Select(p => p.Name));
+            }
+            else
+            {
+                vatNote = $"No VAT summary table — pass vatRateField, vatNetField, vatAmountField and vatGrossField "
+                          + $"(paths on '{lineType.Name}') to add one. Fields available: "
+                          + string.Join(", ", GetReportableProperties(lineType).Select(p => p.Name))
+                          + "; references: " + string.Join(", ", GetReferenceProperties(lineType).Select(p => p.Name)) + ".";
             }
 
-            var rows = all.Cast<object>().ToList();
-            if (rows.Count == 0)
-                return $"No rows of '{type.Name}' match the filter — nothing to put on the invoice.";
-
-            var reportTitle = string.IsNullOrWhiteSpace(title) ? $"Faktura — {type.Name}" : title.Trim();
-            var options = new TemplateOptions { CurrencySymbol = currencySymbol ?? "zl" };
-
-            // Grupowanie na dokumenty — jak w preview_report.
-            string keyPath = null;
+            string orderByPath = null;
             if (!string.IsNullOrWhiteSpace(documentKeyField))
             {
-                keyPath = ResolvePath(type, documentKeyField, out var keyError);
-                if (keyPath == null) return $"documentKeyField: {keyError}";
+                orderByPath = ResolvePath(headerType, documentKeyField, out var orderError);
+                if (orderByPath == null)
+                {
+                    var stripped = documentKeyField.Split('.', 2);
+                    if (stripped.Length == 2 && string.Equals(stripped[0].Trim(), headerType.Name, StringComparison.OrdinalIgnoreCase))
+                        orderByPath = ResolvePath(headerType, stripped[1], out orderError);
+                }
+                if (orderByPath == null) return $"documentKeyField: {orderError}";
             }
-            var groups = keyPath == null
-                ? new List<(string Key, List<object> Rows)> { (reportTitle, rows) }
-                : rows.GroupBy(r => FormatCell(ReadPath(r, keyPath), 60))
-                      .Select(g => (Key: g.Key, Rows: g.ToList())).ToList();
+
+            var reportTitle = string.IsNullOrWhiteSpace(title) ? $"Faktura — {headerType.Name}" : title.Trim();
+            var currency = string.IsNullOrWhiteSpace(currencySymbol) ? "zl" : currencySymbol.Trim();
 
             var output = new StringBuilder();
-            output.AppendLine($"**{reportTitle}** — szablon `{templateName}`");
+            output.AppendLine($"**{reportTitle}**");
+            output.AppendLine();
+            output.AppendLine($"- Header entity (report data source): `{headerType.Name}`");
+            output.AppendLine($"- Line items: `{lineType.Name}`, joined by `{lineType.Name}.{shape.BackReferencePath}`");
             output.AppendLine();
             output.AppendLine("Mapowanie slotów:");
-            foreach (var m in mapped) output.AppendLine($"- {m}");
+            foreach (var s in shape.Slots)
+                output.AppendLine(s.IsLiteral ? $"- {s.Kind} = \"{s.Value}\"" : $"- {s.Kind} <- {s.Value}");
             output.AppendLine();
 
-            // Zapis layoutu do ReportDataV2 — zrodlem jest CollectionDataSource, nie zywa lista,
-            // zeby projektant XAF mial co zwiazac.
-            string savedKey = null;
+            // --- zapis layoutu ------------------------------------------------------
+            // Zrodlem jest CollectionDataSource (master i OBA podraporty), nie zywa lista —
+            // inaczej zapisany blob niesie typy CLR, ktorych deserializacja jest zabroniona.
+            string savedKey;
             {
-                var forSave = new XtraReport { DataSource = groups[0].Rows };
-                new TemplateReportBuilder(forSave, CreateInvoiceTemplate(templateName), fields, options,
-                    ReportUnit.HundredthsOfAnInch).Execute();
+                var forSave = InvoiceReportBuilder.Build(
+                    new CollectionDataSource { ObjectTypeName = headerType.FullName },
+                    new CollectionDataSource { ObjectTypeName = lineType.FullName },
+                    shape.BackReferencePath, shape.Slots, vat, reportTitle, currency, orderByPath);
                 forSave.Name = reportTitle;
-                forSave.DataSource = new CollectionDataSource { ObjectTypeName = type.FullName };
 
                 using var saveScope = CreateObjectSpaceForType(typeof(DevExpress.Persistent.BaseImpl.ReportDataV2));
                 var reportData = saveScope.Os.CreateObject<DevExpress.Persistent.BaseImpl.ReportDataV2>();
@@ -1783,45 +1870,47 @@ public sealed class SchemaAIToolsProvider
                     "[Tool:build_invoice_report] Saved ReportDataV2 key={Key}, DataTypeName='{DataType}'",
                     savedKey, reportData.DataTypeName);
                 forSave.Dispose();
-            }
-            output.AppendLine($"Zapisano do listy Raporty (klucz `{savedKey}`), oznaczony jako inplace. "
-                              + "Odswiez strone (F5), zeby raport pojawil sie w akcji „Pokaz na raporcie” na widokach encji.");
 
+                // Kontrola po zapisie: czy podraporty przezyly serializacje?
+                try
+                {
+                    var reloaded = storage.LoadReport(reportData);
+                    foreach (var band in reloaded.Bands.OfType<Band>())
+                        foreach (var sub in band.Controls.OfType<XRSubreport>())
+                            _logger.LogInformation(
+                                "[Tool:build_invoice_report] Round-trip {Name}: source={Source}, ds={Ds}, filter='{Filter}', bindings={Bindings}",
+                                sub.Name, sub.ReportSource == null ? "NULL" : "ok",
+                                (sub.ReportSource?.DataSource as CollectionDataSource)?.ObjectTypeName ?? "none",
+                                sub.ReportSource?.FilterString, sub.ParameterBindings.Count);
+                    reloaded.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[Tool:build_invoice_report] Round-trip check failed");
+                }
+            }
+            output.AppendLine($"Zapisano do listy Raporty (klucz `{savedKey}`), źródło danych `{headerType.Name}`, "
+                              + "oznaczony jako inplace. Odśwież stronę (F5), żeby raport pojawił się w akcji "
+                              + "„Pokaż na raporcie” na widoku faktur.");
+
+            // --- render próbek ------------------------------------------------------
             if (render)
             {
                 output.AppendLine();
-                output.AppendLine($"### Wyrenderowane dokumenty ({Math.Min(groups.Count, Math.Max(1, sampleCount))} z {groups.Count})");
-                foreach (var (key, groupRows) in groups.Take(Math.Max(1, sampleCount)))
-                {
-                    var target = new XtraReport { DataSource = groupRows };
-                    try
-                    {
-                        new TemplateReportBuilder(target, CreateInvoiceTemplate(templateName), fields, options,
-                            ReportUnit.HundredthsOfAnInch).Execute();
-                        target.CreateDocument();
-                        if (target.Pages.Count == 0)
-                        {
-                            output.AppendLine($"- **{key}** — dokument pusty (0 stron).");
-                            continue;
-                        }
-                        var safeKey = string.Concat((key ?? "faktura").Select(c => char.IsLetterOrDigit(c) ? c : '-'));
-                        var file = Path.Combine(RenderOutputDirectory,
-                            $"invoice-{safeKey}-{DateTime.Now:HHmmss}.png");
-                        target.ExportToImage(file, DevExpress.Drawing.DXImageFormat.Png);
-                        output.AppendLine($"- **{key}** — {groupRows.Count} pozycji, {target.Pages.Count} str., "
-                                          + $"{new FileInfo(file).Length / 1024} kB → `{file}`");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[Tool:build_invoice_report] Render failed for {Key}", key);
-                        output.AppendLine($"- **{key}** — render nie powiódł się: {ex.Message}");
-                    }
-                    finally { target.Dispose(); }
-                }
+                var file = RenderInvoiceSamples(headerType, lineType, shape, vat, reportTitle, currency,
+                    orderByPath, filterCriteria, Math.Max(1, sampleCount), output);
+                _logger.LogInformation("[Tool:build_invoice_report] Rendered sample to {File}", file ?? "<none>");
             }
 
-            _logger.LogInformation("[Tool:build_invoice_report] Done — {Fields} slot(s), {Groups} document(s), {Rows} row(s)",
-                fields.Count, groups.Count, rows.Count);
+            if (vatNote != null)
+            {
+                output.AppendLine();
+                output.AppendLine($"NOTE: {vatNote}");
+            }
+            if (!string.IsNullOrWhiteSpace(templateName) && !string.Equals(templateName, "Invoice1", StringComparison.OrdinalIgnoreCase))
+                output.AppendLine($"NOTE: templateName='{templateName}' was ignored — the layout is built over the header entity now.");
+
+            _logger.LogInformation("[Tool:build_invoice_report] Done — {Slots} slot(s), vat={Vat}", shape.Slots.Count, vat != null);
             return output.ToString();
         }
         catch (Exception ex)
@@ -1829,6 +1918,118 @@ public sealed class SchemaAIToolsProvider
             _logger.LogError(ex, "[Tool:build_invoice_report] Error");
             return $"Error building invoice: {ex.Message}";
         }
+    }
+
+    /// <summary>Podpowiedz dla modelu: jakie pary naglowek/pozycje wchodza w gre dla danej encji.</summary>
+    private static string DescribeShapeCandidates(Type given)
+    {
+        var sb = new StringBuilder();
+        var children = FindChildEntities(given);
+        if (children.Count > 0)
+        {
+            sb.AppendLine($"'{given.Name}' looks like an invoice HEADER. Line-item candidates: "
+                          + string.Join(", ", children.Select(c => $"{c.Child.Name} (via {c.Child.Name}.{c.BackRef})")));
+            sb.AppendLine($"Header fields on '{given.Name}': "
+                          + string.Join(", ", GetReportableProperties(given).Select(p => p.Name))
+                          + "; references: " + string.Join(", ", GetReferenceProperties(given).Select(p => p.Name)));
+            foreach (var (child, _) in children)
+                sb.AppendLine($"Line-item fields on '{child.Name}': "
+                              + string.Join(", ", GetReportableProperties(child).Select(p => p.Name))
+                              + "; references: " + string.Join(", ", GetReferenceProperties(child).Select(p => p.Name)));
+        }
+        else
+        {
+            sb.AppendLine($"'{given.Name}' has no child entity, so it can only be the LINE ITEM side. "
+                          + "Header candidates (its references): "
+                          + string.Join(", ", GetReferenceProperties(given).Select(p => $"{p.Name} -> {p.PropertyType.Name}")));
+            sb.AppendLine($"Fields on '{given.Name}': "
+                          + string.Join(", ", GetReportableProperties(given).Select(p => p.Name)));
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Renderuje probki na zywych danych i dopisuje sciezki plikow do <paramref name="output"/>.</summary>
+    private string RenderInvoiceSamples(
+        Type headerType, Type lineType, InvoiceShape shape, VatSummarySpec vat,
+        string reportTitle, string currency, string orderByPath,
+        string filterCriteria, int sampleCount, StringBuilder output)
+    {
+        using var scope = CreateObjectSpaceForType(headerType);
+
+        List<object> headers;
+        try
+        {
+            CriteriaOperator criteria = string.IsNullOrWhiteSpace(filterCriteria)
+                ? null : CriteriaOperator.Parse(filterCriteria);
+
+            // Filtr moze byc napisany wzgledem encji, ktora podal wywolujacy — jesli to pozycje,
+            // wyciagamy z nich zbior naglowkow, zeby stary sposob wywolania dalej dzialal.
+            if (criteria is not null && FilterTargetsLineEntity(filterCriteria, headerType, lineType))
+            {
+                var lines = scope.Os.GetObjects(lineType, criteria).Cast<object>().ToList();
+                headers = lines.Select(l => ReadPath(l, shape.BackReferencePath))
+                    .Where(h => h != null).Distinct().ToList();
+            }
+            else
+            {
+                headers = scope.Os.GetObjects(headerType, criteria).Cast<object>().ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            output.AppendLine($"- render pominięty: filtr `{filterCriteria}` nie zadziałał — {ex.Message}");
+            return null;
+        }
+
+        if (headers.Count == 0)
+        {
+            output.AppendLine($"- render pominięty: żaden rekord '{headerType.Name}' nie pasuje do filtru.");
+            return null;
+        }
+
+        var sample = headers.Take(sampleCount).ToList();
+        var keys = sample.Select(h => scope.Os.GetKeyValue(h)).ToList();
+        var lineRows = scope.Os
+            .GetObjects(lineType, new InOperator($"{shape.BackReferencePath}.Oid", keys))
+            .Cast<object>().ToList();
+
+        var target = InvoiceReportBuilder.Build(sample, lineRows, shape.BackReferencePath,
+            shape.Slots, vat, reportTitle, currency, orderByPath);
+        try
+        {
+            target.CreateDocument();
+            if (target.Pages.Count == 0)
+            {
+                output.AppendLine("- dokument pusty (0 stron).");
+                return null;
+            }
+            var stamp = DateTime.Now.ToString("HHmmss");
+            var pdf = Path.Combine(RenderOutputDirectory, $"faktura-{headerType.Name}-{stamp}.pdf");
+            target.ExportToPdf(pdf);
+            var png = Path.Combine(RenderOutputDirectory, $"faktura-{headerType.Name}-{stamp}.png");
+            target.ExportToImage(png, DevExpress.Drawing.DXImageFormat.Png);
+            output.AppendLine($"### Wyrenderowane dokumenty ({sample.Count} z {headers.Count}), "
+                              + $"{lineRows.Count} pozycji, {target.Pages.Count} str.");
+            output.AppendLine($"- PDF: `{pdf}`");
+            output.AppendLine($"- PNG: `{png}`");
+            return pdf;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:build_invoice_report] Render failed");
+            output.AppendLine($"- render nie powiódł się: {ex.Message}");
+            return null;
+        }
+        finally { target.Dispose(); }
+    }
+
+    /// <summary>Czy filtr odwoluje sie do pola, ktore istnieje tylko na encji pozycji?</summary>
+    private static bool FilterTargetsLineEntity(string filterCriteria, Type headerType, Type lineType)
+    {
+        var first = System.Text.RegularExpressions.Regex.Match(filterCriteria ?? string.Empty, @"\[?([A-Za-z_][\w\.]*)\]?");
+        if (!first.Success) return false;
+        var path = first.Groups[1].Value;
+        return ResolvePath(headerType, path, out _) is null && ResolvePath(lineType, path, out _) is not null;
     }
 
     // ==========================================================================

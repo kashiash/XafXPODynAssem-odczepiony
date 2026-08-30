@@ -96,6 +96,23 @@ Two metadata tables drive everything:
 - Database auto-updates when debugger is attached; throws version mismatch error in production
 - Connection string key: `ConnectionString` in `appsettings.json`
 
+## Zasada: nie zmieniamy typu pola, nie usuwamy pól
+
+Zmiana `CustomField.TypeName` wdrożonego pola położyła kiedyś publiczną instancję:
+kolumna została z poprzednim typem SQL, XPO przy każdym starcie próbował ją przerobić,
+PostgreSQL odmawiał (42804 / 23503), `UpdateSchema` wybuchał w rozgrzewce XAF-a i proces
+ginął — dwanaście restartów pod rząd, naprawa tylko ręcznym `UPDATE` na metadanych.
+
+Domyślne zachowanie aplikacji i domyślna rada asystenta: **dodajemy nowe pole obok,
+starego nie ruszamy i tylko je ukrywamy** (`IsVisibleInListView`/`IsVisibleInDetailView`).
+**Pól nie usuwamy w ogóle.**
+
+Egzekwuje to `Module/Validation/FieldTypeChangeGuard.cs` na czterech poziomach:
+prompt systemowy (`SchemaDiscoveryService`), narzędzie czatu `modify_entity`,
+reguła walidacji na `CustomField` (łapie UI i import) oraz sanityzacja metadanych
+w `Module.cs`/`QueryMetadata` przed `UpdateSchema` — pole niezgodne ze schematem bazy
+wypada z metadanych, a aplikacja wstaje z komunikatem `[SchemaGuard]` w logu.
+
 ## Session Handoff
 
 See `SESSION_HANDOFF.md` for current status, what was done, known issues, and next steps.

@@ -48,8 +48,8 @@ namespace XafXPODynAssem.Module.Validation
                 if (FieldTypeChangeGuard.IsColumnCompatible(field.TypeName, columnType))
                     return true;
 
-                Tracing.Tracer.LogError(
-                    $"[SchemaGuard] Zablokowany zapis: {className}.{field.FieldName} ma w metadanych " +
+                FieldTypeChangeGuard.Log(
+                    $"Zablokowany zapis: {className}.{field.FieldName} ma w metadanych " +
                     $"„{FieldTypeChangeGuard.Describe(field.TypeName, field.ReferencedClassName)}”, " +
                     $"a kolumna w bazie jest typu „{columnType}”.");
                 return false;
@@ -57,7 +57,7 @@ namespace XafXPODynAssem.Module.Validation
             catch (Exception ex)
             {
                 // Nie blokujemy zapisu, gdy sama kontrola sie wywroci — zostaje straznik startu.
-                Tracing.Tracer.LogError($"[SchemaGuard] Kontrola zmiany typu nie zadzialala: {ex.Message}");
+                FieldTypeChangeGuard.Log($"Kontrola zmiany typu nie zadzialala: {ex.Message}");
                 return true;
             }
         }

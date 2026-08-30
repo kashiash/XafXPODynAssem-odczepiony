@@ -367,10 +367,10 @@ namespace XafXPODynAssem.Module
             var skipped = Validation.FieldTypeChangeGuard.SanitizeMetadata(classes, conn);
             SkippedFieldWarnings = skipped;
             foreach (var problem in skipped)
-                Tracing.Tracer.LogError($"[SchemaGuard] {problem}");
+                Validation.FieldTypeChangeGuard.Log(problem);
             if (skipped.Count > 0)
-                Tracing.Tracer.LogError(
-                    $"[SchemaGuard] Aplikacja wstaje z {skipped.Count} pominietym(i) polem/polami — " +
+                Validation.FieldTypeChangeGuard.Log(
+                    $"Aplikacja wstaje z {skipped.Count} pominietym(i) polem/polami — " +
                     "reszta schematu dziala normalnie.");
 
             return classes;

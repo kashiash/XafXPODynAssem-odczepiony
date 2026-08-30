@@ -35,6 +35,16 @@ namespace XafXPODynAssem.Module.Validation
                 ["System.Byte[]"] = new[] { "bytea" },
             };
 
+        /// <summary>
+        /// Komunikaty straznika ida i do sladu XAF-a, i na konsole — konsola trafia do
+        /// logu petli uruchomieniowej, wiec problem widac bez wchodzenia do aplikacji.
+        /// </summary>
+        public static void Log(string message)
+        {
+            Console.Error.WriteLine($"[SchemaGuard] {message}");
+            try { DevExpress.Persistent.Base.Tracing.Tracer.LogError($"[SchemaGuard] {message}"); } catch { }
+        }
+
         /// <summary>Nazwa typu widziana przez uzytkownika (Reference -> "Referencja do X").</summary>
         public static string Describe(string typeName, string referencedClassName)
         {

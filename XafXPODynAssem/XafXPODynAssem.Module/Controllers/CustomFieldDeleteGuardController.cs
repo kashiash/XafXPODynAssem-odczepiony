@@ -56,11 +56,11 @@ namespace XafXPODynAssem.Module.Controllers
 
                 action.Enabled.SetItemValue(ReasonKey, !blocked);
                 if (blocked)
-                    Tracing.Tracer.LogText($"[SchemaGuard] Akcja Usun zablokowana na widoku {View.Id}. {ReasonText}");
+                    FieldTypeChangeGuard.Log($"Akcja Usun zablokowana na widoku {View.Id}. {ReasonText}");
             }
             catch (Exception ex)
             {
-                Tracing.Tracer.LogError($"[SchemaGuard] Nie udalo sie ocenic usuwania pola: {ex.Message}");
+                FieldTypeChangeGuard.Log($"Nie udalo sie ocenic usuwania pola: {ex.Message}");
                 action.Enabled.SetItemValue(ReasonKey, true);
             }
         }

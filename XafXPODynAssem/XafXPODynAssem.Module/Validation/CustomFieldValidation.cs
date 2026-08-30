@@ -39,19 +39,22 @@ namespace XafXPODynAssem.Module.Validation
                 if (string.IsNullOrWhiteSpace(className) || string.IsNullOrWhiteSpace(field.FieldName))
                     return true;
 
-                var columnType = FieldTypeChangeGuard.GetColumnDataType(
-                    className, field.FieldName, XafXPODynAssemModule.RuntimeConnectionString);
-
+                var connStr = XafXPODynAssemModule.RuntimeConnectionString;
+                var columnType = FieldTypeChangeGuard.GetColumnDataType(className, field.FieldName, connStr);
                 if (columnType == null)
                     return true; // kolumny jeszcze nie ma — zwykle dodanie pola, przepuszczamy
 
-                if (FieldTypeChangeGuard.IsColumnCompatible(field.TypeName, columnType))
+                var fkTarget = FieldTypeChangeGuard.GetForeignKeyTarget(className, field.FieldName, connStr);
+
+                var mismatch = FieldTypeChangeGuard.FindDatabaseMismatch(
+                    className, field.FieldName, field.TypeName, field.ReferencedClassName,
+                    columnType, fkTarget,
+                    () => FieldTypeChangeGuard.HasAnyValue(className, field.FieldName, connStr));
+
+                if (mismatch == null)
                     return true;
 
-                FieldTypeChangeGuard.Log(
-                    $"Zablokowany zapis: {className}.{field.FieldName} ma w metadanych " +
-                    $"„{FieldTypeChangeGuard.Describe(field.TypeName, field.ReferencedClassName)}”, " +
-                    $"a kolumna w bazie jest typu „{columnType}”.");
+                FieldTypeChangeGuard.Log($"Zablokowany zapis: {className}.{field.FieldName} — {mismatch}.");
                 return false;
             }
             catch (Exception ex)

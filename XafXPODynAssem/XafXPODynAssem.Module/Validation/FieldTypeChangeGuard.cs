@@ -234,10 +234,57 @@ namespace XafXPODynAssem.Module.Validation
             return cmd.ExecuteScalar() as string;
         }
 
+        /// <summary>Tabela, na ktora wskazuje klucz obcy zalozony na kolumnie. null = brak FK.</summary>
+        public static string GetForeignKeyTarget(string className, string fieldName, string connectionString)
+        {
+            if (!CustomFieldValidation.IsValidIdentifier(className) ||
+                !CustomFieldValidation.IsValidIdentifier(fieldName))
+                return null;
+
+            var connStr = connectionString ?? XafXPODynAssemModule.RuntimeConnectionString;
+            if (string.IsNullOrWhiteSpace(connStr)) return null;
+
+            using var conn = new NpgsqlConnection(XafXPODynAssemModule.StripXpoProvider(connStr));
+            conn.Open();
+            var map = QueryForeignKeyTargets(conn, new[] { className });
+            return map.TryGetValue((className, fieldName), out var target) ? target : null;
+        }
+
+        /// <summary>Klucze obce jednokolumnowe: (tabela, kolumna) -> tabela docelowa.</summary>
+        private static Dictionary<(string Table, string Column), string> QueryForeignKeyTargets(
+            NpgsqlConnection conn, string[] tableNames)
+        {
+            var result = new Dictionary<(string, string), string>();
+            using var cmd = new NpgsqlCommand(
+                @"SELECT rel.relname, att.attname, frel.relname
+                  FROM pg_constraint con
+                  JOIN pg_class rel ON rel.oid = con.conrelid
+                  JOIN pg_class frel ON frel.oid = con.confrelid
+                  JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+                  JOIN LATERAL unnest(con.conkey) AS k(attnum) ON true
+                  JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+                  WHERE con.contype = 'f'
+                    AND ns.nspname = current_schema()
+                    AND rel.relname = ANY(@tables)
+                    AND array_length(con.conkey, 1) = 1", conn);
+            cmd.Parameters.AddWithValue("tables", tableNames);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                result[(reader.GetString(0), reader.GetString(1))] = reader.GetString(2);
+            return result;
+        }
+
         /// <summary>
         /// Liczba wierszy z niepusta wartoscia w kolumnie.
         /// -1 oznacza, ze tabela albo kolumna jeszcze nie istnieje.
         /// </summary>
+        /// <summary>Czy w kolumnie jest choc jedna niepusta wartosc.</summary>
+        public static bool HasAnyValue(string className, string fieldName, string connectionString)
+        {
+            try { return CountRowsWithValue(className, fieldName, connectionString) > 0; }
+            catch { return true; } // nie wiemy — zakladamy najgorsze
+        }
+
         private static long CountRowsWithValue(string className, string fieldName, string connectionString)
         {
             var connStr = connectionString ?? XafXPODynAssemModule.RuntimeConnectionString;
@@ -246,7 +293,11 @@ namespace XafXPODynAssem.Module.Validation
 
             using var conn = new NpgsqlConnection(XafXPODynAssemModule.StripXpoProvider(connStr));
             conn.Open();
+            return CountRowsWithValue(conn, className, fieldName);
+        }
 
+        private static long CountRowsWithValue(NpgsqlConnection conn, string className, string fieldName)
+        {
             using (var check = new NpgsqlCommand(
                 @"SELECT count(*) FROM information_schema.columns
                   WHERE table_schema = current_schema()
@@ -262,6 +313,49 @@ namespace XafXPODynAssem.Module.Validation
             using var cmd = new NpgsqlCommand(
                 $@"SELECT count(*) FROM ""{className}"" WHERE ""{fieldName}"" IS NOT NULL", conn);
             return Convert.ToInt64(cmd.ExecuteScalar());
+        }
+
+        /// <summary>
+        /// Czy metadana pola zgadza sie z tym, co naprawde stoi w bazie.
+        /// Zwraca null przy zgodzie albo opis problemu. Funkcja czysta — fakty z bazy
+        /// dostaje w argumentach, dzieki czemu uzywaja jej i straznik startu, i walidacja.
+        /// </summary>
+        /// <param name="dataType">typ kolumny (information_schema.data_type), null = brak kolumny</param>
+        /// <param name="fkTarget">tabela wskazywana przez klucz obcy na tej kolumnie, null = brak FK</param>
+        /// <param name="hasData">czy w kolumnie sa niepuste wartosci (liczone leniwie)</param>
+        public static string FindDatabaseMismatch(
+            string className, string fieldName, string typeName, string referencedClassName,
+            string dataType, string fkTarget, Func<bool> hasData)
+        {
+            if (dataType == null)
+                return null; // kolumny nie ma — XPO ja dolozy, to normalne dodanie pola
+
+            var meta = Describe(typeName, referencedClassName);
+
+            if (!IsColumnCompatible(typeName, dataType))
+                return $"metadana mowi „{meta}”, a kolumna w bazie jest typu „{dataType}”";
+
+            if (typeName != "Reference")
+                return null;
+
+            // Kolumna jest uuid — ale trzeba jeszcze sprawdzic, DOKAD wskazuje.
+            // Przestawienie referencji na inna encje konczy sie bledem 23503 przy
+            // zakladaniu klucza obcego, dokladnie tak samo wywracajac rozgrzewke.
+            if (fkTarget != null)
+            {
+                if (!string.Equals(fkTarget, referencedClassName, StringComparison.Ordinal))
+                    return $"metadana mowi „{meta}”, a klucz obcy na kolumnie „{fieldName}” " +
+                           $"wskazuje na tabele „{fkTarget}”";
+                return null;
+            }
+
+            // Brak klucza obcego, a w kolumnie sa dane — XPO sprobuje FK zalozyc
+            // i PostgreSQL odrzuci go bledem 23503, bo wartosci pochodza skadinad.
+            if (hasData != null && hasData())
+                return $"metadana mowi „{meta}”, a kolumna „{fieldName}” ma dane i nie ma na niej " +
+                       $"klucza obcego — zalozenie go teraz nie powiedzie sie";
+
+            return null;
         }
 
         /// <summary>
@@ -290,20 +384,26 @@ namespace XafXPODynAssem.Module.Validation
                     columnTypes[(reader.GetString(0), reader.GetString(1))] = reader.GetString(2);
             }
 
+            var fkTargets = QueryForeignKeyTargets(conn, tableNames);
+
             foreach (var cc in classes)
             {
                 foreach (var field in cc.Fields.ToList())
                 {
-                    if (!columnTypes.TryGetValue((cc.ClassName, field.FieldName), out var dataType))
-                        continue; // kolumny nie ma — XPO ja dolozy, to normalne dodanie pola
+                    columnTypes.TryGetValue((cc.ClassName, field.FieldName), out var dataType);
+                    fkTargets.TryGetValue((cc.ClassName, field.FieldName), out var fkTarget);
 
-                    if (IsColumnCompatible(field.TypeName, dataType))
+                    var mismatch = FindDatabaseMismatch(
+                        cc.ClassName, field.FieldName, field.TypeName, field.ReferencedClassName,
+                        dataType, fkTarget,
+                        () => CountRowsWithValue(conn, cc.ClassName, field.FieldName) > 0);
+
+                    if (mismatch == null)
                         continue;
 
                     cc.Fields.Remove(field);
                     problems.Add(
-                        $"{cc.ClassName}.{field.FieldName}: metadana mowi „{Describe(field.TypeName, field.ReferencedClassName)}”, " +
-                        $"a kolumna w bazie jest typu „{dataType}”. Pole POMINIETE przy budowie klasy runtime, " +
+                        $"{cc.ClassName}.{field.FieldName}: {mismatch}. Pole POMINIETE przy budowie klasy runtime, " +
                         $"zeby aktualizacja schematu nie wywrocila startu aplikacji. " +
                         $"Napraw metadana (przywroc poprzedni typ) albo dodaj nowe pole obok i przenies dane.");
                 }

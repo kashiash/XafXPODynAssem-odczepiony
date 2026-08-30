@@ -1,15 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="100%" height="100%">
-  <rect width="1080" height="1920" fill="#0D0F14" />
-  <g transform="translate(340, 760)" fill="#FFFFFF">
-    <path d="M128 140 C143 112 178 112 193 140" fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
-    <circle cx="295" cy="132" r="18"/>
-    <path d="M172 176 C198 212 242 212 268 176" fill="none" stroke="#0062FF" stroke-width="20" stroke-linecap="round"/>
-    <path d="M90 340 L90 160 L152 160 L226 260 L300 160 L362 160 L362 340 L306 340 L306 240 L246 320 L206 320 L146 240 L146 340 Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="96 118 320 276" width="100%" height="100%">
+  <style>
+    .mordeczka { transform-origin: 256px 256px; animation: oddech 3.2s ease-in-out infinite; }
+    .oko       { transform-origin: 332px 162px; animation: mrugniecie 3.2s ease-in-out infinite; }
+    @keyframes oddech {
+       0%   { transform: scale(0.94) rotate(-2deg); }
+      45%   { transform: scale(1.06) rotate(2deg); }
+     100%   { transform: scale(0.94) rotate(-2deg); }
+    }
+    @keyframes mrugniecie {
+       0%, 62%, 100% { transform: scaleY(1); }
+      68%            { transform: scaleY(0.08); }
+      74%            { transform: scaleY(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .mordeczka, .oko { animation: none; }
+    }
+  </style>
+  <g class="mordeczka" fill="#FFFFFF">
+    <path d="M165 170 C180 142 215 142 230 170" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
+    <circle class="oko" cx="332" cy="162" r="20"/>
+    <path d="M208 208 C234 244 278 244 304 208" fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
+    <path d="M120 372 L120 190 L182 190 L256 292 L330 190 L392 190 L392 372 L334 372 L334 270 L274 350 L238 350 L178 270 L178 372 Z"/>
   </g>
-  <g transform="translate(540, 1680)">
-    <rect x="-60" y="0" width="32" height="6" rx="3" fill="#0062FF"/>
-    <rect x="-16" y="0" width="32" height="6" rx="3" fill="#242B35"/>
-    <rect x="28" y="0" width="32" height="6" rx="3" fill="#242B35"/>
-  </g>
-  <rect x="420" y="1870" width="240" height="5" rx="2.5" fill="#303642"/>
 </svg>

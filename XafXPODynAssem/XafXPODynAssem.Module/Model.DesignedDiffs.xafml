@@ -18,9 +18,9 @@
               NavigationItemId="ReportDataV2_ListView" Color="#00796B" SortOrder="1" IsNewNode="True" />
       </Buttons>
     </Item>
-    <Item Id="Schemat" Caption="Zarzadzanie schematem" SortOrder="10" IsNewNode="True">
+    <Item Id="Schemat" Caption="Zarządzanie schematem" SortOrder="10" IsNewNode="True">
       <Buttons>
-        <Item Id="KlasyUzytkownika" Caption="Klasy uzytkownika" ImageName="ModelEditor_Class_Object"
+        <Item Id="KlasyUzytkownika" Caption="Klasy użytkownika" ImageName="ModelEditor_Class_Object"
               NavigationItemId="CustomClass_ListView" Color="#F57C00" SortOrder="0" IsNewNode="True" />
         <Item Id="HistoriaSchematu" Caption="Historia schematu" ImageName="Action_AboutInfo"
               NavigationItemId="SchemaHistory_ListView" Color="#F57C00" SortOrder="1" IsNewNode="True" />
@@ -28,7 +28,7 @@
     </Item>
     <Item Id="Administracja" Caption="Administracja" SortOrder="90" IsNewNode="True">
       <Buttons>
-        <Item Id="Uzytkownicy" Caption="Uzytkownicy" ImageName="BO_User"
+        <Item Id="Uzytkownicy" Caption="Użytkownicy" ImageName="BO_User"
               NavigationItemId="ApplicationUser_ListView" Color="#7B1FA2" SortOrder="0" IsNewNode="True" />
         <Item Id="Role" Caption="Role" ImageName="BO_Role"
               NavigationItemId="PermissionPolicyRole_ListView" Color="#7B1FA2" SortOrder="1" IsNewNode="True" />

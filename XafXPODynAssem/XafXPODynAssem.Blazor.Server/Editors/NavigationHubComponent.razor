@@ -21,7 +21,7 @@
          @ondrop:preventDefault="true"
          @ondragleave="OnPinnedDragLeave">
         <h5 class="hub-section-header">
-            &#9733; Preferred Actions
+            &#9733; Ulubione
             @if (draggedButton != null && !pinnedButtons.Contains(draggedButton))
             {
                 <span style="font-size: 12px; color: #1976D2; font-weight: 400; margin-left: 8px;">
@@ -48,12 +48,12 @@
                     {
                         <div class="drop-indicator-left"></div>
                     }
-                    <div class="hub-card-unpin" title="Unpin"
+                    <div class="hub-card-unpin" title="Odepnij"
                          @onclick="() => UnpinButton(button)"
                          @onclick:stopPropagation="true">&times;</div>
                     @if (!string.IsNullOrEmpty(button.ExternalUrl))
                     {
-                        <div class="hub-card-external-indicator" title="Opens in new tab">&#8599;</div>
+                        <div class="hub-card-external-indicator" title="Otwiera się w nowej karcie">&#8599;</div>
                     }
                     @if (!string.IsNullOrEmpty(button.ImageUrl))
                     {
@@ -72,7 +72,7 @@
             @if (!pinnedButtons.Any() && draggedButton == null)
             {
                 <div class="hub-empty-hint">
-                    Right-click or drag cards here to pin them
+                    Kliknij kafelek prawym przyciskiem albo przeciągnij go tutaj, żeby przypiąć
                 </div>
             }
         </div>
@@ -111,7 +111,7 @@
                          @oncontextmenu:preventDefault="true">
                         @if (!string.IsNullOrEmpty(btn.ExternalUrl))
                         {
-                            <div class="hub-card-external-indicator" title="Opens in new tab">&#8599;</div>
+                            <div class="hub-card-external-indicator" title="Otwiera się w nowej karcie">&#8599;</div>
                         }
                         @if (!string.IsNullOrEmpty(btn.ImageUrl))
                         {

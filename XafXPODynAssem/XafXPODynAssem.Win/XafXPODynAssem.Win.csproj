@@ -33,25 +33,25 @@
     <EmbeddedResource Include="Images\ExpressAppLogo.png" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="DevExpress.ExpressApp" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.CodeAnalysis" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Dashboards.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.FileAttachment.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Notifications.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Office.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.PivotGrid.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.ReportsV2.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Scheduler.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Security.Xpo" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.TreeListEditors.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Validation.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Win" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Win.Design" Version="25.2.3" />
-    <PackageReference Include="DevExpress.ExpressApp.Xpo" Version="25.2.3" />
-    <PackageReference Include="DevExpress.Persistent.Base" Version="25.2.3" />
-    <PackageReference Include="DevExpress.Persistent.BaseImpl.Xpo" Version="25.2.3" />
-    <PackageReference Include="DevExpress.RichEdit.Export" Version="25.2.3" />
-    <PackageReference Include="DevExpress.Win.Design" Version="25.2.3" />
+    <PackageReference Include="DevExpress.ExpressApp" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.CodeAnalysis" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Dashboards.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.FileAttachment.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Notifications.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Office.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.PivotGrid.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.ReportsV2.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Scheduler.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Security.Xpo" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.TreeListEditors.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Validation.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Win" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Win.Design" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.Xpo" Version="26.1.4" />
+    <PackageReference Include="DevExpress.Persistent.Base" Version="26.1.4" />
+    <PackageReference Include="DevExpress.Persistent.BaseImpl.Xpo" Version="26.1.4" />
+    <PackageReference Include="DevExpress.RichEdit.Export" Version="26.1.4" />
+    <PackageReference Include="DevExpress.Win.Design" Version="26.1.4" />
     <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
     

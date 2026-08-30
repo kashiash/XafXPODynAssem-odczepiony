@@ -13,10 +13,10 @@ namespace XafXPODynAssem.Module.Services
     {
         // -- Header / Empty State -------------------------------------------
 
-        public const string HeaderText = "Schema AI Assistant";
+        public const string HeaderText = "Asystent schematu AI";
 
         public const string EmptyStateText =
-            "Ask me anything about your schema — create entities, add fields, manage relationships & more.\nPowered by LLMTornado.";
+            "Zapytaj o cokolwiek związanego ze schematem — tworzenie encji, dodawanie pól, zarządzanie relacjami i więcej.\nDziała na LLMTornado.";
 
         // -- Prompt Suggestions ---------------------------------------------
 
@@ -27,21 +27,25 @@ namespace XafXPODynAssem.Module.Services
 
         public static IReadOnlyList<PromptSuggestionItem> PromptSuggestions { get; } = new List<PromptSuggestionItem>
         {
-            new("Create Entity",
-                "Create a new runtime entity",
-                "Create a new entity called Employee with fields: FirstName (string), LastName (string), Email (string), HireDate (DateTime), Salary (decimal)"),
+            new("Utwórz encję",
+                "Nowa encja w czasie działania",
+                "Utwórz nową encję o nazwie Pracownik z polami: Imie (string), Nazwisko (string), Email (string), DataZatrudnienia (DateTime), Wynagrodzenie (decimal)"),
 
-            new("List Entities",
-                "Show all runtime entities and their fields",
-                "List all runtime entities with their fields and current status"),
+            new("Lista encji",
+                "Pokaż encje i ich pola",
+                "Wypisz wszystkie encje utworzone w czasie działania wraz z polami i bieżącym statusem"),
 
-            new("Add Fields",
-                "Add fields to an existing entity",
-                "Show me pending changes and help me add new fields to an entity"),
+            new("Dodaj pola",
+                "Rozszerz istniejącą encję",
+                "Pokaż niezatwierdzone zmiany i pomóż mi dodać nowe pola do encji"),
 
-            new("Set Up Permissions",
-                "Configure role-based access",
-                "Help me set up role-based permissions for my runtime entities"),
+            new("Uprawnienia",
+                "Dostęp według ról",
+                "Pomóż mi ustawić uprawnienia rolowe dla encji utworzonych w czasie działania"),
+
+            new("Dane pod raport",
+                "Przygotuj encję do raportowania",
+                "Utwórz encję SprzedazMiesieczna z polami: Miesiac (DateTime), Kontrahent (string), WartoscNetto (decimal), WartoscVat (decimal), LiczbaFaktur (int), a potem nadaj roli Users prawo odczytu, żebym mógł zbudować na niej raport w projektancie raportów"),
         };
 
         // -- Markdown to HTML -----------------------------------------------

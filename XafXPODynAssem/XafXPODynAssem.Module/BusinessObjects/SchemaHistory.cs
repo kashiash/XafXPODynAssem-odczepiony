@@ -15,8 +15,9 @@ namespace XafXPODynAssem.Module.BusinessObjects
     }
 
     [DefaultClassOptions]
-    [NavigationItem("Schema Management")]
+    [NavigationItem("Zarządzanie schematem")]
     [DefaultProperty(nameof(Summary))]
+    [XafDisplayName("Historia zmian schematu")]
     public class SchemaHistory : BaseObject
     {
         public SchemaHistory(Session session) : base(session) { }
@@ -28,6 +29,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         DateTime timestamp;
+        [XafDisplayName("Data i czas")]
         public DateTime Timestamp
         {
             get => timestamp;
@@ -35,6 +37,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string userName;
+        [XafDisplayName("Użytkownik")]
         public string UserName
         {
             get => userName;
@@ -42,6 +45,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         SchemaChangeAction action;
+        [XafDisplayName("Akcja")]
         public SchemaChangeAction Action
         {
             get => action;
@@ -49,6 +53,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string summary;
+        [XafDisplayName("Podsumowanie")]
         public string Summary
         {
             get => summary;
@@ -59,6 +64,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         [VisibleInListView(false)]
         [Size(SizeAttribute.Unlimited)]
         [ModelDefault("RowCount", "20")]
+        [XafDisplayName("Szczegóły")]
         public string Details
         {
             get => details;
@@ -69,6 +75,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         [VisibleInListView(false)]
         [Size(SizeAttribute.Unlimited)]
         [ModelDefault("RowCount", "25")]
+        [XafDisplayName("Schemat JSON")]
         public string SchemaJson
         {
             get => schemaJson;

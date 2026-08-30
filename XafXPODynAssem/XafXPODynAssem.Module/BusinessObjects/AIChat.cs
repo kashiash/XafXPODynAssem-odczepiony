@@ -14,6 +14,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
     [DefaultClassOptions]
     [DefaultProperty(nameof(Caption))]
     [ImageName("Actions_EnterGroup")]
+    [XafDisplayName("Asystent AI")]
     public class AIChat : NonPersistentBaseObject
     {
         public AIChat()
@@ -22,6 +23,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         [Browsable(false)]
+        [XafDisplayName("Nazwa")]
         public string Caption { get; set; }
     }
 }

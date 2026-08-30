@@ -1,3 +1,4 @@
+using System.Globalization;
 using DevExpress.ExpressApp;
 using DevExpress.ExpressApp.Blazor.DesignTime;
 using DevExpress.ExpressApp.Blazor.Services;
@@ -10,6 +11,14 @@ namespace XafXPODynAssem.Blazor.Server
 {
     public class Program : IDesignTimeApplicationFactory
     {
+        // Polska wersja: formaty dat/liczb i jezyk interfejsu.
+        static Program()
+        {
+            var pl = CultureInfo.GetCultureInfo("pl-PL");
+            CultureInfo.DefaultThreadCurrentCulture = pl;
+            CultureInfo.DefaultThreadCurrentUICulture = pl;
+        }
+
         static bool ContainsArgument(string[] args, string argument)
         {
             return args.Any(arg => arg.TrimStart('/').TrimStart('-').ToLower() == argument.ToLower());

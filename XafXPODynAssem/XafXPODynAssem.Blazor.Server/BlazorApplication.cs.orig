@@ -34,7 +34,7 @@ namespace XafXPODynAssem.Blazor.Server
             e.Updater.Update();
             e.Handled = true;
 #else
-            if (System.Diagnostics.Debugger.IsAttached || System.Environment.GetEnvironmentVariable("XAF_UPDATE_DB") == "1")
+            if (System.Diagnostics.Debugger.IsAttached)
             {
                 e.Updater.Update();
                 e.Handled = true;

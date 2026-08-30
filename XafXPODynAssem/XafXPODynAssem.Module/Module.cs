@@ -5,7 +5,7 @@ using DevExpress.ExpressApp.Model.Core;
 using DevExpress.ExpressApp.Updating;
 using DevExpress.ExpressApp.Xpo;
 using DevExpress.Persistent.Base;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 using XafXPODynAssem.Module.BusinessObjects;
 using XafXPODynAssem.Module.Services;
 
@@ -246,28 +246,38 @@ namespace XafXPODynAssem.Module
         /// XPO stores enums as integers: CustomClassStatus.Runtime = 0.
         /// XPO uses "Oid" for the primary key, "GCRecord" for soft delete (NULL = not deleted).
         /// </summary>
+
+        // XPO oczekuje prefiksu "XpoProvider=Postgres;", surowy Npgsql go nie rozumie.
+        internal static string StripXpoProvider(string cs)
+        {
+            if (string.IsNullOrWhiteSpace(cs)) return cs;
+            var parts = cs.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Where(p => !p.TrimStart().StartsWith("XpoProvider=", StringComparison.OrdinalIgnoreCase));
+            return string.Join(";", parts);
+        }
+
         internal static List<RuntimeClassMetadata> QueryMetadata(string connectionString)
         {
             var classes = new List<RuntimeClassMetadata>();
 
-            using var conn = new SqlConnection(connectionString);
+            using var conn = new NpgsqlConnection(StripXpoProvider(connectionString));
             conn.Open();
 
             // Check if the CustomClass table exists
-            using (var checkCmd = new SqlCommand(
+            using (var checkCmd = new NpgsqlCommand(
                 "SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'CustomClass') THEN 1 ELSE 0 END",
                 conn))
             {
-                if ((int)checkCmd.ExecuteScalar() == 0)
+                if (Convert.ToInt32(checkCmd.ExecuteScalar()) == 0)
                     return classes;
             }
 
             // Query all runtime classes (Status = 0 = Runtime, GCRecord IS NULL = not deleted)
             var classMap = new Dictionary<Guid, RuntimeClassMetadata>();
-            using (var cmd = new SqlCommand(
-                @"SELECT [Oid], [ClassName], [NavigationGroup], [Description], [Status], [IsApiExposed]
-                  FROM [CustomClass]
-                  WHERE [Status] = 0 AND [GCRecord] IS NULL",
+            using (var cmd = new NpgsqlCommand(
+                @"SELECT ""Oid"", ""ClassName"", ""NavigationGroup"", ""Description"", ""Status"", ""IsApiExposed""
+                  FROM ""CustomClass""
+                  WHERE ""Status"" = 0 AND ""GCRecord"" IS NULL",
                 conn))
             {
                 using var reader = cmd.ExecuteReader();
@@ -291,15 +301,15 @@ namespace XafXPODynAssem.Module
 
             // Query all fields for the runtime classes
             var classIds = string.Join(",", classMap.Keys.Select(id => $"'{id}'"));
-            using (var cmd = new SqlCommand(
-                $@"SELECT [CustomClass], [FieldName], [TypeName], [IsRequired], [IsDefaultField],
-                          [Description], [ReferencedClassName], [SortOrder],
-                          [IsImmediatePostData], [StringMaxLength],
-                          [IsVisibleInListView], [IsVisibleInDetailView], [IsEditable],
-                          [ToolTip], [DisplayName]
-                   FROM [CustomField]
-                   WHERE [CustomClass] IN ({classIds}) AND [GCRecord] IS NULL
-                   ORDER BY [SortOrder], [FieldName]",
+            using (var cmd = new NpgsqlCommand(
+                $@"SELECT ""CustomClass"", ""FieldName"", ""TypeName"", ""IsRequired"", ""IsDefaultField"",
+                          ""Description"", ""ReferencedClassName"", ""SortOrder"",
+                          ""IsImmediatePostData"", ""StringMaxLength"",
+                          ""IsVisibleInListView"", ""IsVisibleInDetailView"", ""IsEditable"",
+                          ""ToolTip"", ""DisplayName""
+                   FROM ""CustomField""
+                   WHERE ""CustomClass"" IN ({classIds}) AND ""GCRecord"" IS NULL
+                   ORDER BY ""SortOrder"", ""FieldName""",
                 conn))
             {
                 using var reader = cmd.ExecuteReader();

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using DevExpress.ExpressApp;
 using DevExpress.ExpressApp.DC;
+using DevExpress.ExpressApp.Model;
 using DevExpress.Persistent.Base;
 using DevExpress.Persistent.BaseImpl;
 using DevExpress.Persistent.Validation;
@@ -10,15 +11,37 @@ using XafXPODynAssem.Module.Validation;
 
 namespace XafXPODynAssem.Module.BusinessObjects
 {
+    /// <summary>
+    /// Typy pola widziane przez uzytkownika. Persystentny pozostaje string TypeName
+    /// (uzywa go GraduationService przy generowaniu kodu), a ten enum jest tylko
+    /// nakladka UI konwertowana w obie strony.
+    /// </summary>
+    public enum CustomFieldType
+    {
+        Text,
+        Integer,
+        LongInteger,
+        Decimal,
+        Double,
+        Single,
+        Boolean,
+        DateTime,
+        Guid,
+        ByteArray,
+        Reference
+    }
+
     [DefaultClassOptions]
-    [NavigationItem("Schema Management")]
+    [NavigationItem("Zarządzanie schematem")]
     [DefaultProperty(nameof(FieldName))]
+    [XafDisplayName("Pole użytkownika")]
     public class CustomField : BaseObject
     {
         public CustomField(Session session) : base(session) { }
 
         CustomClass customClass;
         [Association("CustomClass-Fields")]
+        [XafDisplayName("Klasa")]
         public CustomClass CustomClass
         {
             get => customClass;
@@ -26,6 +49,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string fieldName;
+        [XafDisplayName("Nazwa pola")]
         public string FieldName
         {
             get => fieldName;
@@ -33,13 +57,75 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string typeName = "System.String";
+        // Edytowane przez FieldType (enum) ponizej. Zostaje widoczne i tylko do odczytu,
+        // bo to ta wartosc trafia do generatora kodu i do narzedzi AI.
+        [ModelDefault("AllowEdit", "False")]
+        [XafDisplayName("Typ CLR")]
         public string TypeName
         {
             get => typeName;
-            set => SetPropertyValue(nameof(TypeName), ref typeName, value);
+            set
+            {
+                if (SetPropertyValue(nameof(TypeName), ref typeName, value))
+                {
+                    OnChanged(nameof(FieldType));
+                }
+            }
         }
 
+        /// <summary>Wybor typu z listy. Konwertuje w obie strony na <see cref="TypeName"/>.</summary>
+        [NonPersistent]
+        [ImmediatePostData]
+        [XafDisplayName("Typ pola")]
+        public CustomFieldType FieldType
+        {
+            get => FromTypeName(TypeName);
+            set
+            {
+                var clr = ToTypeName(value);
+                if (!string.Equals(TypeName, clr, StringComparison.Ordinal))
+                {
+                    TypeName = clr;
+                }
+            }
+        }
+
+        static string ToTypeName(CustomFieldType t) => t switch
+        {
+            CustomFieldType.Text => "System.String",
+            CustomFieldType.Integer => "System.Int32",
+            CustomFieldType.LongInteger => "System.Int64",
+            CustomFieldType.Decimal => "System.Decimal",
+            CustomFieldType.Double => "System.Double",
+            CustomFieldType.Single => "System.Single",
+            CustomFieldType.Boolean => "System.Boolean",
+            CustomFieldType.DateTime => "System.DateTime",
+            CustomFieldType.Guid => "System.Guid",
+            CustomFieldType.ByteArray => "System.Byte[]",
+            CustomFieldType.Reference => "Reference",
+            _ => "System.String"
+        };
+
+        // Wartosc spoza listy (np. wpisana wczesniej recznie) mapuje sie na Text,
+        // ale TypeName zostaje nietkniety dopoki uzytkownik czegos nie wybierze.
+        static CustomFieldType FromTypeName(string name) => name switch
+        {
+            "System.String" => CustomFieldType.Text,
+            "System.Int32" => CustomFieldType.Integer,
+            "System.Int64" => CustomFieldType.LongInteger,
+            "System.Decimal" => CustomFieldType.Decimal,
+            "System.Double" => CustomFieldType.Double,
+            "System.Single" => CustomFieldType.Single,
+            "System.Boolean" => CustomFieldType.Boolean,
+            "System.DateTime" => CustomFieldType.DateTime,
+            "System.Guid" => CustomFieldType.Guid,
+            "System.Byte[]" => CustomFieldType.ByteArray,
+            "Reference" => CustomFieldType.Reference,
+            _ => CustomFieldType.Text
+        };
+
         bool isRequired;
+        [XafDisplayName("Wymagane")]
         public bool IsRequired
         {
             get => isRequired;
@@ -47,6 +133,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool isDefaultField;
+        [XafDisplayName("Pole domyślne")]
         public bool IsDefaultField
         {
             get => isDefaultField;
@@ -54,6 +141,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string description;
+        [XafDisplayName("Opis")]
         public string Description
         {
             get => description;
@@ -61,6 +149,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string referencedClassName;
+        [XafDisplayName("Klasa referencyjna")]
         public string ReferencedClassName
         {
             get => referencedClassName;
@@ -68,6 +157,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         int sortOrder;
+        [XafDisplayName("Kolejność")]
         public int SortOrder
         {
             get => sortOrder;
@@ -75,6 +165,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool isImmediatePostData;
+        [XafDisplayName("Natychmiastowy zapis")]
         public bool IsImmediatePostData
         {
             get => isImmediatePostData;
@@ -82,6 +173,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         int? stringMaxLength;
+        [XafDisplayName("Maks. długość tekstu")]
         public int? StringMaxLength
         {
             get => stringMaxLength;
@@ -89,6 +181,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool isVisibleInListView = true;
+        [XafDisplayName("Widoczne na liście")]
         public bool IsVisibleInListView
         {
             get => isVisibleInListView;
@@ -96,6 +189,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool isVisibleInDetailView = true;
+        [XafDisplayName("Widoczne w szczegółach")]
         public bool IsVisibleInDetailView
         {
             get => isVisibleInDetailView;
@@ -103,6 +197,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool isEditable = true;
+        [XafDisplayName("Edytowalne")]
         public bool IsEditable
         {
             get => isEditable;
@@ -110,6 +205,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string toolTip;
+        [XafDisplayName("Podpowiedź")]
         public string ToolTip
         {
             get => toolTip;
@@ -117,6 +213,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string displayName;
+        [XafDisplayName("Etykieta")]
         public string DisplayName
         {
             get => displayName;

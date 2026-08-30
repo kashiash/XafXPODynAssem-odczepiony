@@ -67,10 +67,10 @@ namespace XafXPODynAssem.Module.Controllers
                     var connStr = XafXPODynAssemModule.RuntimeConnectionString;
                     if (!string.IsNullOrEmpty(connStr))
                     {
-                        using var conn = new Microsoft.Data.SqlClient.SqlConnection(connStr);
+                        using var conn = new Npgsql.NpgsqlConnection(XafXPODynAssemModule.StripXpoProvider(connStr));
                         conn.Open();
-                        using var cmd = new Microsoft.Data.SqlClient.SqlCommand(
-                            @"INSERT INTO [SchemaHistory] ([Oid], [Timestamp], [UserName], [Action], [Summary], [Details])
+                        using var cmd = new Npgsql.NpgsqlCommand(
+                            @"INSERT INTO ""SchemaHistory"" (""Oid"", ""Timestamp"", ""UserName"", ""Action"", ""Summary"", ""Details"")
                               VALUES (@oid, @ts, @user, @action, @summary, @details)", conn);
                         cmd.Parameters.AddWithValue("@oid", Guid.NewGuid());
                         cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow);

@@ -18,7 +18,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
     }
 
     [DefaultClassOptions]
-    [NavigationItem("Schema Management")]
+    [NavigationItem("Zarządzanie schematem")]
     [DefaultProperty(nameof(ClassName))]
     [Appearance("GraduatedEntity", TargetItems = "*",
         Criteria = "Status = 2",
@@ -30,11 +30,13 @@ namespace XafXPODynAssem.Module.BusinessObjects
         Context = "ListView",
         FontColor = "Orange",
         FontStyle = DevExpress.Drawing.DXFontStyle.Italic)]
+    [XafDisplayName("Klasa użytkownika")]
     public class CustomClass : BaseObject
     {
         public CustomClass(Session session) : base(session) { }
 
         string className;
+        [XafDisplayName("Nazwa klasy")]
         public string ClassName
         {
             get => className;
@@ -42,6 +44,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         string navigationGroup;
+        [XafDisplayName("Grupa nawigacji")]
         public string NavigationGroup
         {
             get => navigationGroup;
@@ -50,6 +53,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
 
         string description;
         [Size(SizeAttribute.Unlimited)]
+        [XafDisplayName("Opis")]
         public string Description
         {
             get => description;
@@ -57,6 +61,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         CustomClassStatus status;
+        [XafDisplayName("Status")]
         public CustomClassStatus Status
         {
             get => status;
@@ -64,6 +69,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool isApiExposed;
+        [XafDisplayName("Wystawiona w API")]
         public bool IsApiExposed
         {
             get => isApiExposed;
@@ -71,6 +77,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         }
 
         bool generateAsPartial;
+        [XafDisplayName("Generuj jako partial")]
         public bool GenerateAsPartial
         {
             get => generateAsPartial;
@@ -80,6 +87,7 @@ namespace XafXPODynAssem.Module.BusinessObjects
         string graduatedSource;
         [VisibleInListView(false)]
         [Size(SizeAttribute.Unlimited)]
+        [XafDisplayName("Wygenerowany kod")]
         public string GraduatedSource
         {
             get => graduatedSource;

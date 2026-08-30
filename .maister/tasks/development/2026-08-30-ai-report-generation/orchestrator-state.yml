@@ -2,7 +2,7 @@ orchestrator:
   task:
     name: ai-report-generation
     description: Podpiąć generowanie raportów AI (build_report / validate_report_spec) w XafXPODynAssem
-    status: in_progress
+    status: completed
     created: 2026-08-30T14:39:19Z
     updated: 2026-08-30T14:39:19Z
   options:
@@ -20,5 +20,5 @@ orchestrator:
       creates_new_entities: true
       involves_data_operations: true
       ui_heavy: false                  # brak nowego UI; korzystamy z istniejącego czatu i wbudowanego projektanta XAF
-  completed_phases: []
+  completed_phases: [1, 2, 5, 7, 8, 11, 12, 14]
   failed_phases: []

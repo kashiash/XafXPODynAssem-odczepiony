@@ -58,6 +58,12 @@ public sealed class SchemaAIToolsProvider
             AIFunctionFactory.Create(BuildReport, "build_report"),
             AIFunctionFactory.Create(PreviewReport, "preview_report"),
             AIFunctionFactory.Create(BuildInvoiceReport, "build_invoice_report"),
+            // Workflow (state machine) tools
+            AIFunctionFactory.Create(ListWorkflows, "list_workflows"),
+            AIFunctionFactory.Create(DescribeWorkflow, "describe_workflow"),
+            AIFunctionFactory.Create(CreateWorkflow, "create_workflow"),
+            AIFunctionFactory.Create(AddWorkflowState, "add_workflow_state"),
+            AIFunctionFactory.Create(AddWorkflowTransition, "add_workflow_transition"),
         };
     }
 
@@ -2035,6 +2041,425 @@ public sealed class SchemaAIToolsProvider
     }
 
     // ==========================================================================
+    // WORKFLOW (STATE MACHINE) TOOLS
+    // ==========================================================================
+
+    /// <summary>Zywy typ CLR dla nazwy encji — najpierw typy runtime, potem cala TypesInfo.</summary>
+    private static Type ResolveLiveType(string entityName)
+    {
+        if (string.IsNullOrWhiteSpace(entityName)) return null;
+
+        var runtime = XafXPODynAssemModule.AssemblyManager.RuntimeTypes
+            .FirstOrDefault(t => string.Equals(t.Name, entityName, StringComparison.OrdinalIgnoreCase));
+        if (runtime != null) return runtime;
+
+        try
+        {
+            return XafTypesInfo.Instance.PersistentTypes
+                .FirstOrDefault(ti => ti.Type != null
+                    && string.Equals(ti.Name, entityName, StringComparison.OrdinalIgnoreCase))?.Type;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static WorkflowDefinition FindWorkflow(IObjectSpace os, string entityName)
+    {
+        var liveType = ResolveLiveType(entityName);
+        var all = os.GetObjectsQuery<WorkflowDefinition>().ToList();
+        if (liveType != null)
+        {
+            var byFullName = all.FirstOrDefault(w => w.TargetTypeName == liveType.FullName);
+            if (byFullName != null) return byFullName;
+        }
+        return all.FirstOrDefault(w => string.Equals(w.TargetEntityName, entityName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string DescribeStateProperty(Type liveType, string propertyName, out bool ok)
+    {
+        ok = false;
+        if (liveType == null) return "entity type is not deployed";
+        var prop = liveType.GetProperty(propertyName ?? "");
+        if (prop == null) return $"property '{propertyName}' does not exist on the deployed type";
+        if (prop.PropertyType != typeof(string)) return $"property '{propertyName}' is {prop.PropertyType.Name}, must be System.String";
+        ok = true;
+        return "ok";
+    }
+
+    [Description("List all workflows (state machines) defined for runtime entities: target entity, state property, number of states and transitions, and whether the workflow is currently live.")]
+    private string ListWorkflows()
+    {
+        _logger.LogInformation("[Tool:list_workflows] Called");
+        try
+        {
+            using var scope = CreateObjectSpace();
+            var flows = scope.Os.GetObjectsQuery<WorkflowDefinition>().OrderBy(w => w.Name).ToList();
+            if (flows.Count == 0)
+                return "No workflows defined yet. Use `create_workflow` to define one.";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("| Workflow | Entity | State property | States | Transitions | Start state | Live |");
+            sb.AppendLine("|---|---|---|---|---|---|---|");
+            foreach (var w in flows)
+            {
+                var states = w.States.Cast<WorkflowState>().ToList();
+                var transitions = states.Sum(s => s.Transitions.Cast<WorkflowTransition>().Count());
+                var liveType = w.ResolveTargetType();
+                DescribeStateProperty(liveType, w.StatePropertyName, out var propOk);
+                var live = w.IsActive && liveType != null && propOk ? "yes" : "no";
+                sb.AppendLine($"| {w.Name} | {w.TargetEntityName} | {w.StatePropertyName} | {states.Count} | {transitions} | {w.StartState?.Caption ?? "(none)"} | {live} |");
+            }
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:list_workflows] Error");
+            return $"Error listing workflows: {ex.Message}";
+        }
+    }
+
+    [Description("Show the full workflow (state machine) of one runtime entity: every state, its stored marker value, and every allowed transition out of it. Call this before changing an existing workflow.")]
+    private string DescribeWorkflow(
+        [Description("Runtime entity class name, e.g. 'Faktura'.")] string entityName)
+    {
+        _logger.LogInformation("[Tool:describe_workflow] Called with entity={Entity}", entityName);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(entityName))
+                return "Error: entityName is required.";
+
+            using var scope = CreateObjectSpace();
+            var w = FindWorkflow(scope.Os, entityName);
+            if (w == null)
+            {
+                var withFlows = scope.Os.GetObjectsQuery<WorkflowDefinition>()
+                    .Select(x => x.TargetTypeName).ToList()
+                    .Select(n => n?.Substring(n.LastIndexOf('.') + 1)).Where(n => n != null).OrderBy(n => n);
+                var list = string.Join(", ", withFlows);
+                return $"No workflow defined for '{entityName}'. Entities that do have one: {(string.IsNullOrEmpty(list) ? "none" : list)}. Use `create_workflow` to define one.";
+            }
+
+            var liveType = w.ResolveTargetType();
+            var propStatus = DescribeStateProperty(liveType, w.StatePropertyName, out var propOk);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"## {w.Name}");
+            sb.AppendLine($"- **Entity:** {w.TargetEntityName} ({w.TargetTypeName})");
+            sb.AppendLine($"- **State property:** {w.StatePropertyName} — {propStatus}");
+            sb.AppendLine($"- **Start state:** {w.StartState?.Caption ?? "(none — records with an empty state property will show no transitions)"}");
+            sb.AppendLine($"- **Active:** {(w.IsActive ? "yes" : "no")}, live in UI: {(w.IsActive && propOk ? "yes" : "no")}");
+            sb.AppendLine();
+
+            var states = w.States.Cast<WorkflowState>().OrderBy(s => s.SortOrder).ThenBy(s => s.Caption).ToList();
+            if (states.Count == 0)
+            {
+                sb.AppendLine("No states defined.");
+                return sb.ToString();
+            }
+
+            sb.AppendLine("| State | Marker written to the field | Allowed transitions to |");
+            sb.AppendLine("|---|---|---|");
+            foreach (var s in states)
+            {
+                var targets = s.Transitions.Cast<WorkflowTransition>()
+                    .OrderBy(t => t.SortIndex)
+                    .Select(t => t.TargetState == null ? "(?)" : $"{t.TargetState.Caption} (\"{t.Caption}\")");
+                var joined = string.Join(", ", targets);
+                var start = w.StartState == s ? " *(start)*" : "";
+                sb.AppendLine($"| {s.Caption}{start} | {s.MarkerValue} | {(string.IsNullOrEmpty(joined) ? "— (terminal state)" : joined)} |");
+            }
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:describe_workflow] Error");
+            return $"Error describing workflow: {ex.Message}";
+        }
+    }
+
+    [Description("Create a workflow (state machine) for a runtime entity: its states, its start state and the allowed transitions between states. " +
+                 "The entity must already be deployed and must already have a System.String field that holds the state. " +
+                 "NEVER guess the states, the start state or which transitions are allowed — ask the user first. " +
+                 "Nothing is written unless every state and transition validates.")]
+    private string CreateWorkflow(
+        [Description("Runtime entity class name the workflow applies to, e.g. 'Faktura'.")] string entityName,
+        [Description("Name of the System.String field on that entity that stores the current state, e.g. 'Status'. It must already exist on the deployed type, unless createStatePropertyIfMissing is true.")] string statePropertyName,
+        [Description("Comma-separated state captions in order, e.g. 'Robocza,Wystawiona,Zapłacona,Anulowana'.")] string states,
+        [Description("Caption of the state a brand new record starts in, e.g. 'Robocza'. Must be one of `states`. Ask the user if they did not say it.")] string startState,
+        [Description("JSON array of allowed transitions: [{\"from\":\"Robocza\",\"to\":\"Wystawiona\",\"caption\":\"Wystaw\"}]. `caption` is the label on the button and is optional (defaults to the target state name).")] string transitionsJson,
+        [Description("Workflow name shown in the UI. Optional, defaults to 'Przepływ <Entity>'.")] string workflowName = null,
+        [Description("When the state field does not exist yet: add it to the entity metadata as System.String and STOP (the workflow is not created, the user must Deploy first). Defaults to false — ask the user before setting it.")] bool createStatePropertyIfMissing = false)
+    {
+        _logger.LogInformation("[Tool:create_workflow] entity={Entity} property={Prop} states={States}",
+            entityName, statePropertyName, states);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(entityName))
+                return "Error: entityName is required.";
+            if (string.IsNullOrWhiteSpace(statePropertyName))
+                return "Error: statePropertyName is required — the name of the String field that holds the state. Ask the user which field it is.";
+            if (string.IsNullOrWhiteSpace(states))
+                return "Error: states is required — a comma-separated list of state captions. Ask the user which states the document goes through.";
+
+            using var scope = CreateObjectSpace();
+
+            // -- encja musi istniec w metadanych
+            var cc = scope.Os.GetObjectsQuery<CustomClass>().FirstOrDefault(c => c.ClassName == entityName);
+            if (cc == null)
+            {
+                var available = string.Join(", ", scope.Os.GetObjectsQuery<CustomClass>()
+                    .Select(c => c.ClassName).OrderBy(n => n));
+                return $"Entity '{entityName}' not found. Available entities: {(string.IsNullOrEmpty(available) ? "none" : available)}";
+            }
+
+            // -- encja musi byc wdrozona (zywy typ CLR)
+            var liveType = ResolveLiveType(entityName);
+            if (liveType == null)
+                return $"Entity '{entityName}' exists in metadata but is not deployed yet. Ask the user to click Deploy (the application restarts), then call create_workflow again.";
+
+            // -- wlasciwosc sterujaca stanem
+            var propStatus = DescribeStateProperty(liveType, statePropertyName, out var propOk);
+            if (!propOk)
+            {
+                var stringFields = cc.Fields.Cast<CustomField>()
+                    .Where(f => f.TypeName == "System.String")
+                    .Select(f => f.FieldName).OrderBy(n => n).ToList();
+                var candidates = stringFields.Count == 0 ? "none" : string.Join(", ", stringFields);
+
+                if (!createStatePropertyIfMissing)
+                {
+                    return $"Cannot use '{statePropertyName}' as the state property: {propStatus}. "
+                         + $"Existing System.String fields on '{entityName}': {candidates}. "
+                         + $"Either pick one of them, or ask the user whether to add a new text field named '{statePropertyName}' "
+                         + $"and call create_workflow again with createStatePropertyIfMissing=true.";
+                }
+
+                var existingField = cc.Fields.Cast<CustomField>()
+                    .FirstOrDefault(f => f.FieldName == statePropertyName);
+                if (existingField != null)
+                    return $"Field '{statePropertyName}' already exists in the metadata of '{entityName}' as {existingField.TypeName}, but the deployed type does not have it yet ({propStatus}). Ask the user to click Deploy, then call create_workflow again.";
+
+                var maxSort = cc.Fields.Cast<CustomField>().Select(f => f.SortOrder).DefaultIfEmpty(0).Max();
+                var newField = scope.Os.CreateObject<CustomField>();
+                newField.CustomClass = cc;
+                newField.FieldName = statePropertyName;
+                newField.TypeName = "System.String";
+                newField.SortOrder = maxSort + 1;
+                newField.Description = "Stan przepływu (maszyna stanów)";
+                scope.Os.CommitChanges();
+
+                _logger.LogInformation("[Tool:create_workflow] Added state field {Field} to {Entity}", statePropertyName, entityName);
+                return $"Added field '{statePropertyName}' (System.String) to '{entityName}'. The workflow was NOT created yet — this is a schema change. "
+                     + $"Tell the user to click Deploy (the application restarts), then call create_workflow again with the same arguments.";
+            }
+
+            // -- jeden przeplyw na encje
+            var existingFlow = FindWorkflow(scope.Os, entityName);
+            if (existingFlow != null)
+                return $"Entity '{entityName}' already has workflow '{existingFlow.Name}'. Call `describe_workflow` to see it, then use `add_workflow_state` / `add_workflow_transition` to extend it.";
+
+            // -- stany
+            var stateCaptions = states.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+            if (stateCaptions.Count < 2)
+                return "Error: a workflow needs at least two states. Ask the user which states the document goes through.";
+            var duplicates = stateCaptions.GroupBy(s => s, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+            if (duplicates.Count > 0)
+                return $"Error: duplicated state captions: {string.Join(", ", duplicates)}.";
+
+            // -- stan poczatkowy
+            if (string.IsNullOrWhiteSpace(startState))
+                return $"Error: startState is required. Ask the user which of these states a new record starts in: {string.Join(", ", stateCaptions)}.";
+            var startCaption = stateCaptions.FirstOrDefault(s => string.Equals(s, startState.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (startCaption == null)
+                return $"Error: startState '{startState}' is not one of the states. Available: {string.Join(", ", stateCaptions)}.";
+
+            // -- przejscia
+            var transitionDefs = new List<TransitionDefinition>();
+            if (!string.IsNullOrWhiteSpace(transitionsJson))
+            {
+                try
+                {
+                    transitionDefs = JsonSerializer.Deserialize<List<TransitionDefinition>>(transitionsJson,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new List<TransitionDefinition>();
+                }
+                catch (JsonException jex)
+                {
+                    return $"Error: transitionsJson is not valid JSON ({jex.Message}). Expected [{{\"from\":\"A\",\"to\":\"B\",\"caption\":\"...\"}}].";
+                }
+            }
+            if (transitionDefs.Count == 0)
+                return $"Error: transitionsJson is required — without transitions no button appears on the entity view. Ask the user which moves are allowed between: {string.Join(", ", stateCaptions)}.";
+
+            var problems = new List<string>();
+            foreach (var t in transitionDefs)
+            {
+                if (stateCaptions.FirstOrDefault(s => string.Equals(s, t.From?.Trim(), StringComparison.OrdinalIgnoreCase)) == null)
+                    problems.Add($"transition source '{t.From}' is not one of the states");
+                if (stateCaptions.FirstOrDefault(s => string.Equals(s, t.To?.Trim(), StringComparison.OrdinalIgnoreCase)) == null)
+                    problems.Add($"transition target '{t.To}' is not one of the states");
+                if (string.Equals(t.From?.Trim(), t.To?.Trim(), StringComparison.OrdinalIgnoreCase))
+                    problems.Add($"transition '{t.From}' -> '{t.To}' goes back to the same state");
+            }
+            if (problems.Count > 0)
+                return $"Nothing was created. Problems: {string.Join("; ", problems)}. Available states: {string.Join(", ", stateCaptions)}.";
+
+            // -- zapis
+            var flow = scope.Os.CreateObject<WorkflowDefinition>();
+            flow.Name = string.IsNullOrWhiteSpace(workflowName) ? $"Przepływ {entityName}" : workflowName.Trim();
+            flow.TargetTypeName = liveType.FullName;
+            flow.StatePropertyName = statePropertyName;
+            flow.IsActive = true;
+
+            var byCaption = new Dictionary<string, WorkflowState>(StringComparer.OrdinalIgnoreCase);
+            var order = 0;
+            foreach (var caption in stateCaptions)
+            {
+                var st = scope.Os.CreateObject<WorkflowState>();
+                st.Workflow = flow;
+                st.Caption = caption;
+                st.MarkerValue = caption;
+                st.SortOrder = order++;
+                byCaption[caption] = st;
+            }
+            flow.StartState = byCaption[startCaption];
+
+            var index = 0;
+            foreach (var t in transitionDefs)
+            {
+                var src = byCaption[t.From.Trim()];
+                var dst = byCaption[t.To.Trim()];
+                var tr = scope.Os.CreateObject<WorkflowTransition>();
+                tr.SourceState = src;
+                tr.TargetState = dst;
+                tr.Caption = string.IsNullOrWhiteSpace(t.Caption) ? dst.Caption : t.Caption.Trim();
+                tr.SortIndex = index++;
+            }
+
+            scope.Os.CommitChanges();
+
+            _logger.LogInformation("[Tool:create_workflow] Created '{Name}' with {States} states and {Transitions} transitions",
+                flow.Name, stateCaptions.Count, transitionDefs.Count);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Workflow '{flow.Name}' created for **{entityName}** on field **{statePropertyName}**.");
+            sb.AppendLine($"- States ({stateCaptions.Count}): {string.Join(" -> ", stateCaptions)}");
+            sb.AppendLine($"- Start state: {startCaption}");
+            sb.AppendLine($"- Transitions ({transitionDefs.Count}): {string.Join(", ", transitionDefs.Select(t => $"{t.From}->{t.To}"))}");
+            sb.AppendLine();
+            sb.AppendLine("No deploy and no restart is needed — states and transitions are data, not schema.");
+            sb.AppendLine($"Tell the user to refresh the page (F5) and open a **{entityName}** record; the **Change State** action on the toolbar now offers the allowed transitions.");
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:create_workflow] Error");
+            return $"Error creating workflow: {ex.Message}";
+        }
+    }
+
+    [Description("Add one more state to an existing workflow. Does not create any transition — call add_workflow_transition afterwards, otherwise the new state can never be reached.")]
+    private string AddWorkflowState(
+        [Description("Runtime entity class name whose workflow is extended, e.g. 'Faktura'.")] string entityName,
+        [Description("Caption of the new state, e.g. 'Zaksięgowana'.")] string stateCaption,
+        [Description("Value literally written into the state field. Optional, defaults to the caption.")] string markerValue = null,
+        [Description("Make this the start state of the workflow. Defaults to false.")] bool isStartState = false)
+    {
+        _logger.LogInformation("[Tool:add_workflow_state] entity={Entity} state={State}", entityName, stateCaption);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(entityName))
+                return "Error: entityName is required.";
+            if (string.IsNullOrWhiteSpace(stateCaption))
+                return "Error: stateCaption is required.";
+
+            using var scope = CreateObjectSpace();
+            var flow = FindWorkflow(scope.Os, entityName);
+            if (flow == null)
+                return $"No workflow defined for '{entityName}'. Use `create_workflow` first.";
+
+            var states = flow.States.Cast<WorkflowState>().ToList();
+            if (states.Any(s => string.Equals(s.Caption, stateCaption.Trim(), StringComparison.OrdinalIgnoreCase)))
+                return $"State '{stateCaption}' already exists in '{flow.Name}'. Existing states: {string.Join(", ", states.Select(s => s.Caption))}.";
+
+            var st = scope.Os.CreateObject<WorkflowState>();
+            st.Workflow = flow;
+            st.Caption = stateCaption.Trim();
+            st.MarkerValue = string.IsNullOrWhiteSpace(markerValue) ? stateCaption.Trim() : markerValue.Trim();
+            st.SortOrder = states.Select(s => s.SortOrder).DefaultIfEmpty(-1).Max() + 1;
+            if (isStartState)
+                flow.StartState = st;
+
+            scope.Os.CommitChanges();
+
+            return $"State '{st.Caption}' added to workflow '{flow.Name}' (marker written to {flow.StatePropertyName}: \"{st.MarkerValue}\")"
+                 + (isStartState ? " and set as the start state." : ".")
+                 + " It has no transitions yet — call `add_workflow_transition` to make it reachable.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:add_workflow_state] Error");
+            return $"Error adding state: {ex.Message}";
+        }
+    }
+
+    [Description("Add one allowed transition between two existing states of a workflow. This is what puts a button into the Change State action on the entity view.")]
+    private string AddWorkflowTransition(
+        [Description("Runtime entity class name whose workflow is extended, e.g. 'Faktura'.")] string entityName,
+        [Description("Caption of the state the transition starts from.")] string fromState,
+        [Description("Caption of the state the transition leads to.")] string toState,
+        [Description("Label shown on the button, e.g. 'Anuluj'. Optional, defaults to the target state caption.")] string caption = null)
+    {
+        _logger.LogInformation("[Tool:add_workflow_transition] entity={Entity} {From}->{To}", entityName, fromState, toState);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(entityName))
+                return "Error: entityName is required.";
+            if (string.IsNullOrWhiteSpace(fromState) || string.IsNullOrWhiteSpace(toState))
+                return "Error: both fromState and toState are required.";
+
+            using var scope = CreateObjectSpace();
+            var flow = FindWorkflow(scope.Os, entityName);
+            if (flow == null)
+                return $"No workflow defined for '{entityName}'. Use `create_workflow` first.";
+
+            var states = flow.States.Cast<WorkflowState>().ToList();
+            var all = string.Join(", ", states.Select(s => s.Caption));
+            var src = states.FirstOrDefault(s => string.Equals(s.Caption, fromState.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (src == null)
+                return $"State '{fromState}' does not exist in workflow '{flow.Name}'. Available states: {all}.";
+            var dst = states.FirstOrDefault(s => string.Equals(s.Caption, toState.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (dst == null)
+                return $"State '{toState}' does not exist in workflow '{flow.Name}'. Available states: {all}.";
+            if (src == dst)
+                return $"Error: '{fromState}' and '{toState}' are the same state — a transition to itself does nothing.";
+
+            var existing = src.Transitions.Cast<WorkflowTransition>().ToList();
+            if (existing.Any(t => t.TargetState == dst))
+                return $"Transition '{src.Caption}' -> '{dst.Caption}' already exists in '{flow.Name}'.";
+
+            var tr = scope.Os.CreateObject<WorkflowTransition>();
+            tr.SourceState = src;
+            tr.TargetState = dst;
+            tr.Caption = string.IsNullOrWhiteSpace(caption) ? dst.Caption : caption.Trim();
+            tr.SortIndex = existing.Select(t => t.SortIndex).DefaultIfEmpty(-1).Max() + 1;
+
+            scope.Os.CommitChanges();
+
+            return $"Transition '{src.Caption}' -> '{dst.Caption}' (button \"{tr.Caption}\") added to workflow '{flow.Name}'. "
+                 + $"Tell the user to refresh the page (F5); no deploy is needed.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tool:add_workflow_transition] Error");
+            return $"Error adding transition: {ex.Message}";
+        }
+    }
+
+    // ==========================================================================
     // JSON DTOs for tool parameters
     // ==========================================================================
 
@@ -2045,6 +2470,13 @@ public sealed class SchemaAIToolsProvider
         public bool Required { get; set; }
         public string ReferencedClass { get; set; }
         public string Description { get; set; }
+    }
+
+    private sealed class TransitionDefinition
+    {
+        public string From { get; set; }
+        public string To { get; set; }
+        public string Caption { get; set; }
     }
 
     private sealed class ModificationsPayload

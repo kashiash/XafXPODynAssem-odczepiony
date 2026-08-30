@@ -118,6 +118,19 @@ namespace XafXPODynAssem.Module.Services
             sb.AppendLine("- Only call `build_report` once the spec has no MISSING items left. To show the user how it looks, call `preview_report` with render=true, a documentKeyField and headerLines — it returns image files, so the user does not have to open the report designer.");
             sb.AppendLine();
 
+            // Przeplywy (maszyny stanow)
+            sb.AppendLine("## Workflows (State Machines)");
+            sb.AppendLine("- A workflow describes the states a record goes through and which moves between them are allowed. Reach for these tools when the user talks about przepływ / workflow / obieg dokumentu / stany / statusy / akceptacja, or dictates a chain like \"Robocza -> Wystawiona -> Zapłacona\".");
+            sb.AppendLine("- Tools: `list_workflows`, `describe_workflow`, `create_workflow`, `add_workflow_state`, `add_workflow_transition`.");
+            sb.AppendLine("- **NEVER guess the parts the user did not say.** Before calling `create_workflow` you must know all four: (1) which entity, (2) which System.String field stores the state, (3) which state a brand new record starts in, (4) which transitions are allowed. If any is missing, ask ONE specific question about it and wait for the answer. Do not invent a start state and do not invent transitions the user did not describe.");
+            sb.AppendLine("- Transitions are directed. `A -> B` does not also give `B -> A`. A phrase like \"z każdego stanu poza Zapłaconą można anulować\" means one transition into the cancel state from EACH of the other states — list them out explicitly and read them back to the user before writing.");
+            sb.AppendLine("- A state with no outgoing transition is terminal (the Change State action shows nothing on it). That is usually intended for the last state — confirm it rather than silently adding a way back.");
+            sb.AppendLine("- `create_workflow` requires the entity to be DEPLOYED and to already have a System.String field for the state. If that field is missing the tool refuses and lists the entity's existing text fields. Ask the user whether to add a new one (and under what name); only then call `create_workflow` again with `createStatePropertyIfMissing=true`. That call ADDS THE FIELD AND STOPS — adding a field is a schema change, so the user must click Deploy (the application restarts) before you call `create_workflow` one more time with the same arguments.");
+            sb.AppendLine("- States and transitions themselves are DATA, not schema: creating or extending a workflow needs no Deploy and no restart. Tell the user to refresh the page (F5) and open a record — the **Change State** action on the toolbar then offers the allowed transitions.");
+            sb.AppendLine("- The state field becomes read-only in the UI on purpose; the state is meant to change only through the Change State action.");
+            sb.AppendLine("- To change an existing workflow call `describe_workflow` first and extend it with `add_workflow_state` / `add_workflow_transition`. Never create a second workflow for the same entity.");
+            sb.AppendLine();
+
             // Supported field types
             sb.AppendLine("## Supported Field Types");
             foreach (var typeName in SupportedTypes.AllTypeNames)

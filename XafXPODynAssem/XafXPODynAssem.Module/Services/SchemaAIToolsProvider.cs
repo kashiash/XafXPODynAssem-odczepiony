@@ -1324,8 +1324,8 @@ public sealed class SchemaAIToolsProvider
         [Description("Comma-separated numeric field paths totalled below the table. Optional.")] string summaryFields = null)
     {
         _logger.LogInformation(
-            "[Tool:preview_report] Called with entity={Entity}, fields={Fields}, filter={Filter}, maxRows={MaxRows}, render={Render}, samples={Samples}, key={Key}",
-            entityName, fieldPaths, filterCriteria, maxRows, render, sampleCount, documentKeyField);
+            "[Tool:preview_report] Called with entity={Entity}, fields={Fields}, filter={Filter}, maxRows={MaxRows}, render={Render}, samples={Samples}, key={Key}, header={Header}, summary={Summary}",
+            entityName, fieldPaths, filterCriteria, maxRows, render, sampleCount, documentKeyField, headerLines, summaryFields);
         try
         {
             var validation = ValidateReportRequest(entityName, fieldPaths, null, sortByField,
@@ -1413,8 +1413,8 @@ public sealed class SchemaAIToolsProvider
                     title, headerLines, summaryFields, sortDescending, filterCriteria));
             }
 
-            _logger.LogInformation("[Tool:preview_report] Returned {Shown} of {Total} row(s), rendered={Render}",
-                shown.Count, totalCount, render);
+            _logger.LogInformation("[Tool:preview_report] Returned {Shown} of {Total} row(s), rendered={Render}, summaryFields={Summary}",
+                shown.Count, totalCount, render, string.IsNullOrWhiteSpace(summaryFields) ? "(none)" : summaryFields);
             return output.ToString();
         }
         catch (Exception ex)

@@ -27,7 +27,10 @@ services:
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - xpodyn-pgdata:/var/lib/postgresql/data
+      # postgres:18 wymaga montowania /var/lib/postgresql, NIE .../data — obraz
+      # trzyma dane w podkatalogu z numerem wersji major. Podmontowanie starej
+      # sciezki konczy sie petla restartow ("PostgreSQL data in unused mount").
+      - xpodyn-pgdata:/var/lib/postgresql
     networks:
       - xpodyn-net
     healthcheck:

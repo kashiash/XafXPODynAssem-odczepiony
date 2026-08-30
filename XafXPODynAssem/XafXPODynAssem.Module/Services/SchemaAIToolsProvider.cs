@@ -1677,7 +1677,9 @@ public sealed class SchemaAIToolsProvider
                  "InvoiceDueDate, Subtotal, DiscountTotal, TaxTotal, Total. " +
                  "Line-item slots (paths relative to the LINE ITEM entity, which the tool finds by itself): " +
                  "ProductName, ProductDescription, Quantity, UnitPrice, UnitDiscount, UnitTax, Discount, Tax, " +
-                 "DiscountLineTotal, TaxLineTotal, LineTotal.")]
+                 "DiscountLineTotal, TaxLineTotal, LineTotal. " +
+                 "Note: `Tax` and `Discount` are RATES (23 meaning 23%) and print without a currency symbol; " +
+                 "for the VAT or discount AMOUNT of a line use `TaxLineTotal` / `DiscountLineTotal`.")]
     private string BuildInvoiceReport(
         [Description("The INVOICE HEADER entity, e.g. 'Faktura'. One record = one invoice. " +
                      "The tool finds the line-item entity by itself (a runtime entity referencing this one). " +

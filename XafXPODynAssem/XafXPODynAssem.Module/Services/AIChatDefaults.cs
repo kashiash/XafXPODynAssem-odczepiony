@@ -43,9 +43,9 @@ namespace XafXPODynAssem.Module.Services
                 "Dostęp według ról",
                 "Pomóż mi ustawić uprawnienia rolowe dla encji utworzonych w czasie działania"),
 
-            new("Dane pod raport",
-                "Przygotuj encję do raportowania",
-                "Utwórz encję SprzedazMiesieczna z polami: Miesiac (DateTime), Kontrahent (string), WartoscNetto (decimal), WartoscVat (decimal), LiczbaFaktur (int), a potem nadaj roli Users prawo odczytu, żebym mógł zbudować na niej raport w projektancie raportów"),
+            new("Przygotuj raport",
+                "Rozpiska z grupowaniem i sumami",
+                "Zbuduj raport na encji SprzedazMiesieczna: tytuł „Sprzedaż miesięczna”, kolumny Miesiac, Kontrahent, WartoscNetto, WartoscVat, LiczbaFaktur, grupowanie po Kontrahent, sortowanie po Miesiac, sumowanie w grupach po WartoscNetto, WartoscVat i LiczbaFaktur, A4 poziomo. Jeśli encja jeszcze nie istnieje albo nie jest wdrożona, powiedz mi wprost, czego brakuje i co mam kliknąć."),
         };
 
         // -- Markdown to HTML -----------------------------------------------

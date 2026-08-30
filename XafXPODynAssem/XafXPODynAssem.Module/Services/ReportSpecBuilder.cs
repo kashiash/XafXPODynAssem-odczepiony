@@ -136,28 +136,23 @@ namespace XafXPODynAssem.Module.Services
             }
             report.Bands.Add(detail);
 
-            // Pasmo podsumowania — sumy pol liczbowych pod tabela (wartosc netto, brutto...).
+            // Podsumowania: sumy w grupach i suma calkowita, ustawione w siatce kolumn,
+            // zeby liczby staly pod swoimi naglowkami. Zrodlem prawdy jest spec.SummaryFields.
             var summary = ParseList(spec.SummaryFields);
             if (summary.Count > 0)
             {
-                var summaryBand = new ReportFooterBand { HeightF = 12 + summary.Count * LineHeight };
-                var top = 8f;
-                foreach (var field in summary)
+                var summarySet = new HashSet<string>(summary, StringComparer.OrdinalIgnoreCase);
+
+                if (!string.IsNullOrWhiteSpace(groupByPath))
                 {
-                    var label = new XRLabel
-                    {
-                        TopF = top,
-                        WidthF = usable,
-                        HeightF = LineHeight,
-                        TextAlignment = DevExpress.XtraPrinting.TextAlignment.MiddleRight,
-                        Font = new DXFont(FontFamily, 10, DXFontStyle.Bold),
-                    };
-                    label.ExpressionBindings.Add(new ExpressionBinding(
-                        "BeforePrint", "Text", $"'Razem {field}: ' + sumSum([{field}])"));
-                    summaryBand.Controls.Add(label);
-                    top += LineHeight;
+                    var groupFooter = new GroupFooterBand { HeightF = 24 };
+                    groupFooter.Controls.Add(BuildSummaryRow(columns, usable, summarySet, SummaryRunning.Group, "Razem w grupie:"));
+                    report.Bands.Add(groupFooter);
                 }
-                report.Bands.Add(summaryBand);
+
+                var reportFooter = new ReportFooterBand { HeightF = 28 };
+                reportFooter.Controls.Add(BuildSummaryRow(columns, usable, summarySet, SummaryRunning.Report, "Razem:"));
+                report.Bands.Add(reportFooter);
             }
 
             var pageFooter = new PageFooterBand { HeightF = 20 };
@@ -215,6 +210,51 @@ namespace XafXPODynAssem.Module.Services
         }
 
         static string Quote(string text) => "'" + text.Replace("'", "''") + "'";
+
+        /// <summary>
+        /// Wiersz sum ustawiony w tej samej siatce co dane, zeby liczby staly pod swoimi kolumnami.
+        /// Kolumna spoza <paramref name="summarySet"/> zostaje pusta; pierwsza taka dostaje etykiete.
+        /// </summary>
+        static XRTable BuildSummaryRow(
+            IReadOnlyList<ReportColumnSpec> columns,
+            float usableWidth,
+            HashSet<string> summarySet,
+            SummaryRunning running,
+            string label)
+        {
+            var table = new XRTable { WidthF = usableWidth, HeightF = 22 };
+            var row = new XRTableRow();
+            table.Rows.Add(row);
+
+            var cellWidth = columns.Count > 0 ? usableWidth / columns.Count : usableWidth;
+            var labelPlaced = false;
+            foreach (var column in columns)
+            {
+                var cell = new XRTableCell
+                {
+                    WidthF = cellWidth,
+                    Font = new DXFont(FontFamily, 9.75f, DXFontStyle.Bold),
+                    Padding = new DevExpress.XtraPrinting.PaddingInfo(4, 4, 2, 2),
+                    BorderColor = Color.Silver,
+                    Borders = DevExpress.XtraPrinting.BorderSide.Top,
+                };
+
+                if (summarySet.Contains(column.Path))
+                {
+                    cell.Summary = new XRSummary { Running = running, Func = SummaryFunc.Sum, FormatString = "{0:N2}" };
+                    cell.ExpressionBindings.Add(new ExpressionBinding("BeforePrint", "Text", $"sumSum([{column.Path}])"));
+                    cell.TextAlignment = DevExpress.XtraPrinting.TextAlignment.MiddleRight;
+                }
+                else if (!labelPlaced)
+                {
+                    cell.Text = label;
+                    labelPlaced = true;
+                }
+
+                row.Cells.Add(cell);
+            }
+            return table;
+        }
 
         static XRTable BuildRow(IReadOnlyList<ReportColumnSpec> columns, float usableWidth, bool isHeader)
         {

@@ -111,3 +111,4 @@ See `SESSION_HANDOFF.md` for current status, what was done, known issues, and ne
 - Type mapping: `Module/Services/SupportedTypes.cs`
 - Restart: `Blazor.Server/Services/RestartService.cs`, `Blazor.Server/Program.cs` (exit code 42)
 - SignalR: `Blazor.Server/Hubs/SchemaUpdateHub.cs`
+- Przepływy (maszyny stanów): `Module/BusinessObjects/Workflow.cs` (WorkflowDefinition/WorkflowState/WorkflowTransition — własny `StateMachineStorageType`), rejestracja w `Blazor.Server/Startup.cs` (`.AddStateMachine`), narzędzia czatu w `Module/Services/SchemaAIToolsProvider.cs` (`create_workflow` i spółka)

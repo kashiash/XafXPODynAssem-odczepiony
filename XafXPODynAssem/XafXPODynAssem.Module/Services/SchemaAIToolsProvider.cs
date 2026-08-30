@@ -13,6 +13,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using XafXPODynAssem.Module.BusinessObjects;
+using XafXPODynAssem.Module.Validation;
 
 namespace XafXPODynAssem.Module.Services;
 
@@ -416,6 +417,19 @@ public sealed class SchemaAIToolsProvider
             var result = RuntimeAssemblyBuilder.ValidateCompilation(metadata);
 
             var sb = new StringBuilder();
+
+            // Pola, ktore straznik schematu pominal przy ostatnim starcie — metadana
+            // nie zgadza sie z typem kolumny w bazie. To dla uzytkownika wazniejsze
+            // niz wynik samej kompilacji.
+            var skipped = XafXPODynAssemModule.SkippedFieldWarnings;
+            if (skipped != null && skipped.Count > 0)
+            {
+                sb.AppendLine($"**UWAGA — {skipped.Count} pole/pola pominiete przy starcie aplikacji** (metadana kloci sie ze schematem bazy):");
+                foreach (var problem in skipped)
+                    sb.AppendLine($"- {problem}");
+                sb.AppendLine();
+            }
+
             if (result.Success)
             {
                 sb.AppendLine("Compilation **successful**.");
@@ -522,10 +536,10 @@ public sealed class SchemaAIToolsProvider
         }
     }
 
-    [Description("Modify an existing runtime entity — add fields, remove fields, update fields, or change class-level properties. After modification, call validate_schema then Deploy.")]
+    [Description("Modify an existing runtime entity — ADD fields, update field metadata (description, required, visibility), or change class-level properties. Removing a field is NOT allowed. Changing the TYPE of a field that is already deployed or holds data is NOT allowed — add a new field next to it instead. After modification, call validate_schema then Deploy.")]
     private string ModifyEntity(
         [Description("The class name of the entity to modify.")] string entityName,
-        [Description("JSON object with modifications: {\"addFields\": [{\"name\": \"...\", \"type\": \"...\", \"required\": false, \"referencedClass\": null}], \"removeFields\": [\"FieldName\"], \"updateFields\": [{\"name\": \"ExistingField\", \"type\": \"System.Int32\", \"required\": true}], \"navigationGroup\": \"NewGroup\", \"description\": \"New desc\", \"isApiExposed\": true}")] string modificationsJson)
+        [Description("JSON object with modifications: {\"addFields\": [{\"name\": \"...\", \"type\": \"...\", \"required\": false, \"referencedClass\": null}], \"updateFields\": [{\"name\": \"ExistingField\", \"required\": true, \"description\": \"...\"}], \"navigationGroup\": \"NewGroup\", \"description\": \"New desc\", \"isApiExposed\": true}. Do NOT send \"removeFields\" — field removal is refused. In \"updateFields\" do NOT send a different \"type\"/\"referencedClass\" for a deployed field — the type change is refused; add a new field instead.")] string modificationsJson)
     {
         _logger.LogInformation("[Tool:modify_entity] Modifying {Name}", entityName);
         try
@@ -555,6 +569,55 @@ public sealed class SchemaAIToolsProvider
             if (mods == null)
                 return "Error: Could not parse modificationsJson.";
 
+            // ---- Straznik schematu: sprawdzamy PRZED jakakolwiek zmiana ----------------
+            // Usuwania pol nie robimy w ogole, a typu wdrozonego pola nie zmieniamy.
+            if (mods.RemoveFields != null && mods.RemoveFields.Count > 0)
+            {
+                var refusals = mods.RemoveFields
+                    .Select(fn => FieldTypeChangeGuard.BuildFieldRemovalRefusal(entityName, fn));
+                var msg = string.Join("\n\n", refusals);
+                _logger.LogWarning("[Tool:modify_entity] ODMOWA usuniecia pol w {Name}: {Fields}",
+                    entityName, string.Join(", ", mods.RemoveFields));
+                return msg + "\n\nZadna zmiana nie zostala zapisana.";
+            }
+
+            if (mods.UpdateFields != null)
+            {
+                var typeRefusals = new List<string>();
+                foreach (var fd in mods.UpdateFields)
+                {
+                    if (fd.Type == null && fd.ReferencedClass == null)
+                        continue;
+
+                    var existingField = cc.Fields?.Cast<CustomField>().FirstOrDefault(f => f.FieldName == fd.Name);
+                    if (existingField == null)
+                        continue;
+
+                    var newType = string.IsNullOrWhiteSpace(fd.ReferencedClass)
+                        ? (fd.Type ?? existingField.TypeName)
+                        : "Reference";
+                    var newRef = fd.ReferencedClass ?? existingField.ReferencedClassName;
+
+                    if (!FieldTypeChangeGuard.IsTypeChangeSafe(
+                            entityName, existingField.FieldName,
+                            existingField.TypeName, existingField.ReferencedClassName,
+                            newType, newRef,
+                            XafXPODynAssemModule.RuntimeConnectionString,
+                            out var reason))
+                    {
+                        typeRefusals.Add(reason);
+                    }
+                }
+
+                if (typeRefusals.Count > 0)
+                {
+                    _logger.LogWarning("[Tool:modify_entity] ODMOWA zmiany typu pol w {Name}: {Count}",
+                        entityName, typeRefusals.Count);
+                    return string.Join("\n\n", typeRefusals) + "\n\nZadna zmiana nie zostala zapisana.";
+                }
+            }
+            // ---------------------------------------------------------------------------
+
             var changes = new List<string>();
 
             // Update class-level properties
@@ -572,24 +635,6 @@ public sealed class SchemaAIToolsProvider
             {
                 cc.IsApiExposed = mods.IsApiExposed.Value;
                 changes.Add($"IsApiExposed -> {mods.IsApiExposed.Value}");
-            }
-
-            // Remove fields
-            if (mods.RemoveFields != null)
-            {
-                foreach (var fieldName in mods.RemoveFields)
-                {
-                    var field = cc.Fields?.Cast<CustomField>().FirstOrDefault(f => f.FieldName == fieldName);
-                    if (field != null)
-                    {
-                        scope.Os.Delete(field);
-                        changes.Add($"Removed field '{fieldName}'");
-                    }
-                    else
-                    {
-                        changes.Add($"Field '{fieldName}' not found (skipped)");
-                    }
-                }
             }
 
             // Add fields

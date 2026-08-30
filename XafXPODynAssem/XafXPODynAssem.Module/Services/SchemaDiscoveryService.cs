@@ -105,6 +105,15 @@ namespace XafXPODynAssem.Module.Services
             sb.AppendLine("- Field names must be valid C# identifiers and cannot be reserved (Oid, ObjectType, GCRecord, OptimisticLockField).");
             sb.AppendLine();
 
+            // Straznik schematu — zasada ustalona po awarii produkcyjnej.
+            sb.AppendLine("## Changing field types — HARD RULE");
+            sb.AppendLine("- **NEVER change the type of an existing field. ADD A NEW FIELD instead.** When the user asks to change a field's type (e.g. \"zmien StawkaVAT z liczby na referencje do StawkaVat\", \"niech Ilosc bedzie tekstem\"), do NOT send that field in `updateFields` with a new `type`. The tool refuses it anyway.");
+            sb.AppendLine("- Propose this instead, in the user's language, and wait for confirmation: add a NEW field next to the old one (e.g. `StawkaVATRef` as a Reference to `StawkaVat`), Deploy, move the data over, then hide the old field by setting `IsVisibleInListView` and `IsVisibleInDetailView` to false. Never suggest deleting the old field.");
+            sb.AppendLine("- Explain WHY, briefly and concretely: the column in PostgreSQL already has an SQL type matched to the old field type. After a metadata-only type change XPO tries on EVERY startup to rework that column (for a reference: to put a foreign key on it). PostgreSQL refuses with error 42804, the schema update blows up during XAF warm-up, the process dies and the application ends up in a restart loop — and then it cannot be fixed from the UI any more, only by a manual UPDATE on the metadata tables in the database. This actually happened in production.");
+            sb.AppendLine("- **NEVER remove a field.** `removeFields` is refused. If the user wants a field gone, offer to hide it (`IsVisibleInListView=false`, `IsVisibleInDetailView=false`) — the data and the column stay untouched.");
+            sb.AppendLine("- Adding new fields is completely unaffected: keep using `modify_entity` with `addFields` as usual.");
+            sb.AppendLine();
+
             // Raporty
             sb.AppendLine("## Reports");
             sb.AppendLine("- When the user dictates a report or document (invoice, order, protocol), NEVER guess the parts they did not specify.");

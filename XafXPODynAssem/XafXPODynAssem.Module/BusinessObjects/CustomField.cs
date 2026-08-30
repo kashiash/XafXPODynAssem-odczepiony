@@ -244,6 +244,20 @@ namespace XafXPODynAssem.Module.BusinessObjects
             "A Reference field requires a Referenced Class Name.")]
         [Browsable(false)]
         public bool IsReferenceClassValid => TypeName != "Reference" || !string.IsNullOrWhiteSpace(ReferencedClassName);
+
+        // Zmiana typu wdrozonego pola z danymi wywraca aktualizacje schematu i klaudzie
+        // aplikacje w petli restartow. Dodajemy nowe pole obok zamiast przerabiac istniejace.
+        [NonPersistent]
+        [RuleFromBoolProperty("CustomField_TypeChangeSafe", DefaultContexts.Save,
+            "Nie mozna zmienic typu pola, ktore jest juz wdrozone albo ma dane w bazie. " +
+            "Kolumna w bazie ma juz typ SQL dopasowany do starego typu — po takiej zmianie XPO przy " +
+            "kazdym starcie probowalby ja przerobic, PostgreSQL by odmowil, aktualizacja schematu " +
+            "wybuchlaby w rozgrzewce i aplikacja wpadlaby w petle restartow. " +
+            "Zamiast tego DODAJ NOWE POLE obok (np. z przyrostkiem Ref/Nowe) w docelowym typie, " +
+            "przenies do niego dane, a stare pole zostaw i tylko ukryj " +
+            "(Widoczne na liscie = Nie, Widoczne w szczegolach = Nie).")]
+        [Browsable(false)]
+        public bool IsTypeChangeSafe => CustomFieldValidation.IsTypeChangeSafe(this);
 #pragma warning restore XAF0020
     }
 }

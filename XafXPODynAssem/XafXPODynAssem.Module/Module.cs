@@ -28,6 +28,12 @@ namespace XafXPODynAssem.Module
 
         public static string DegradedModeReason { get; private set; }
 
+        /// <summary>
+        /// Pola pominiete przy budowie klas runtime, bo ich metadana nie zgadza sie
+        /// z typem kolumny w bazie. Zamiast wywracac start aplikacji zglaszamy problem.
+        /// </summary>
+        public static IReadOnlyList<string> SkippedFieldWarnings { get; private set; } = Array.Empty<string>();
+
         private readonly HashSet<Type> _addedRuntimeTypes = new();
 
         public static void ResetForRestart()
@@ -38,6 +44,7 @@ namespace XafXPODynAssem.Module
             DegradedMode = false;
             DegradedModeReason = null;
             ApiExposedClassNames = new();
+            SkippedFieldWarnings = Array.Empty<string>();
 
             XafTypesInfo.HardReset();
             ClearSharedModelManagerCache();
@@ -352,6 +359,19 @@ namespace XafXPODynAssem.Module
                     }
                 }
             }
+
+            // Zabezpieczenie startu: pole, ktorego metadana kloci sie z typem kolumny
+            // w bazie (np. TypeName="Reference" nad kolumna numeric), wypada z metadanych.
+            // Bez tego XPO probowalby zalozyc na niej klucz obcy, PostgreSQL odmowilby
+            // bledem 42804, UpdateSchema wybuchlby w rozgrzewce XAF-a i proces by zginal.
+            var skipped = Validation.FieldTypeChangeGuard.SanitizeMetadata(classes, conn);
+            SkippedFieldWarnings = skipped;
+            foreach (var problem in skipped)
+                Tracing.Tracer.LogError($"[SchemaGuard] {problem}");
+            if (skipped.Count > 0)
+                Tracing.Tracer.LogError(
+                    $"[SchemaGuard] Aplikacja wstaje z {skipped.Count} pominietym(i) polem/polami — " +
+                    "reszta schematu dziala normalnie.");
 
             return classes;
         }

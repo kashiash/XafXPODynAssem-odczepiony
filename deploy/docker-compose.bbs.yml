@@ -8,10 +8,6 @@
 #     instancja. Aplikacja laczy sie po nazwie uslugi (xpodyn-db:5432),
 #     wiec nie zalezy od portu opublikowanego na hoscie.
 #
-# Wolumen xpodyn-pgdata jest nazwany i celowo NIE jest zwiazany z cyklem zycia
-# kontenera aplikacji — przebudowa obrazu (np. przejscie Debug -> Release) nie
-# rusza danych ani zasianego uzytkownika Admin.
-#
 # Uruchomienie:
 #   PGPASSWORD=... AZURE_OPENAI_KEY=... docker compose -f docker-compose.bbs.yml up -d
 
@@ -23,7 +19,7 @@ services:
     environment:
       POSTGRES_PASSWORD: "${PGPASSWORD:?ustaw PGPASSWORD}"
       POSTGRES_DB: XafXPODynAssem
-    # Tylko do reczne diagnostyki psql z hosta; aplikacja tego nie uzywa.
+    # Tylko do recznej diagnostyki psql z hosta; aplikacja tego nie uzywa.
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
@@ -42,9 +38,11 @@ services:
   xpodyn:
     image: quantumwizards/xpodyn:latest
     container_name: xpodyn
-    # 42 = "przeladuj po deploy schematu". on-failure restartuje przy kazdym
-    # kodzie != 0 (wiec i przy 42), limit 5 chroni przed petla crashowa.
-    restart: on-failure:5
+    # Deploy Schema KONCZY proces kodem 42 — to zachowanie zaprojektowane, nie
+    # awaria (swiezego assembly nie da sie przeladowac w locie). Dlatego
+    # unless-stopped, a NIE on-failure:N — licznik on-failure jest kumulatywny
+    # i po N wdrozeniach schematu kontener zatrzymalby sie na dobre.
+    restart: unless-stopped
     depends_on:
       xpodyn-db:
         condition: service_healthy
@@ -52,6 +50,11 @@ services:
       - "127.0.0.1:8087:8080"
     networks:
       - xpodyn-net
+    volumes:
+      # Klucze DataProtection. Bez tego kazda przebudowa obrazu uniewaznia
+      # ciasteczka i wylogowuje wszystkich. Sciezka jest domyslna dla ASP.NET
+      # przy uruchomieniu jako root — ten sam wzorzec ma kontener kierat-blazor.
+      - xpodyn-keys:/root/.aspnet/DataProtection-Keys
     environment:
       ASPNETCORE_URLS: "http://+:8080"
       # Bez Development static assets DevExpressa daja 404 — strona zwraca 200,
@@ -72,3 +75,5 @@ networks:
 volumes:
   xpodyn-pgdata:
     name: xpodyn-pgdata
+  xpodyn-keys:
+    name: xpodyn-keys

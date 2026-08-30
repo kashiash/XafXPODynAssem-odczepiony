@@ -151,3 +151,104 @@ Ręczny `ReportSpecBuilder` zostawić do raportów listowych, gdzie żaden szabl
 - czy sloty `Tax`/`Discount` liczą polski VAT tak, jak trzeba
 - `TemplateCategory.Sales` istnieje, ale nie znalazłem typów szablonów sprzedażowych —
   możliwe, że kategoria jest przygotowana na przyszłość
+
+---
+
+# Czy to zadziała na naszych strukturach dynamicznych?
+
+Pytanie brzmiało: „nawet jak dla XPO tak, to dla EF już nie". Sprawdziłem empirycznie.
+**Odpowiedź: zadziała, a pytanie o ORM jest nieaktualne.**
+
+## Dlaczego ORM nie ma znaczenia
+
+Ani jeden z moich testów **nie użył żadnego ORM-a**. Ani XPO, ani EF. `TemplateReportBuilder`
+dostaje zwykłą kolekcję .NET i wiąże pola **po nazwie właściwości** (`f.Value = "Nabywca"`),
+przez deskryptory właściwości CLR. Nie dotyka ani `Session`, ani `DbContext`, ani metadanych ORM.
+
+Skoro działa na czystej klasie CLR i na klasie wyemitowanej Roslynem, to encje EF Core —
+które są zwykłymi klasami CLR — są dokładnie tym samym przypadkiem.
+
+## Test 1: typ generowany w runtime (Roslyn + AssemblyLoadContext)
+
+Skompilowałem `DynPozycjaFaktury` w locie, załadowałem przez `AssemblyLoadContext`
+(dokładnie jak `RuntimeAssemblyBuilder`), wypełniłem przez refleksję i zbudowałem fakturę.
+
+Wynik: **identyczny z klasą kompilowaną** — `dx-typ-runtime.png`. Nabywca, numer, data,
+pozycje, policzone wartości i `TOTAL 11244,00`.
+
+## Test 2: kształt kolekcji
+
+`IObjectSpace.GetObjects(type, criteria)` zwraca nietypowaną `IList`, a nasze `preview_report`
+robi z tego `List<object>`. Sprawdziłem trzy warianty na tym samym typie runtime:
+
+| Źródło | Wynik |
+|---|---|
+| `List<DynPozycjaFaktury>` (typowana) | STRON 1, PNG 29313 B |
+| `List<object>` | STRON 1, PNG **29313 B** |
+| `ArrayList` (nietypowana) | STRON 1, PNG **29313 B** |
+
+Bajtowo identyczne. XtraReports czyta deskryptory z **typu pierwszego elementu**, nie
+z parametru generycznego listy. To znaczy, że kolekcja z naszego ObjectSpace nadaje się
+bez konwersji.
+
+## Test 3: zero nowych pakietów
+
+Szablony siedzą w `DevExpress.XtraReports.v26.1.dll`, który wchodzi tranzytywnie z
+`DevExpress.ExpressApp.ReportsV2`. Sprawdziłem osobnym projektem z **dokładnie takim
+zestawem pakietów, jaki ma Module** (`ExpressApp.ReportsV2` + `Persistent.Base`):
+`InvoiceTemplate1`, `TemplateReportBuilder`, `TemplateField`, `TemplateFieldKind`,
+`TemplateOptions` — wszystko kompiluje się bez dokładania czegokolwiek.
+
+## Test 4: zapis do ReportDataV2 i projektant XAF — pytanie ZAMKNIĘTE
+
+To była otwarta wątpliwość z pierwszej części analizy. Rozstrzygnięta:
+
+1. buduję szablon na **żywej liście** (builder musi widzieć dane, żeby złożyć układ)
+2. podmieniam źródło na `CollectionDataSource { ObjectTypeName = typ.FullName }`
+3. `SaveLayoutToXml` — 24 441 B (to samo robi `ReportStoreModes.XML` w `SaveReport`)
+4. wczytuję z powrotem: `DataSource` = `CollectionDataSource`, `ObjectTypeName` zachowany
+5. podstawiam żywą listę i renderuję: dane się wiążą, `TOTAL 9897,00 zł` = 5499 + 4398
+
+Dowód: `dx-roundtrip-collectiondatasource.png`.
+
+Czyli **ten sam rozdział, który już mamy** w `preview_report`: żywa lista do renderu,
+`CollectionDataSource` do zapisanego layoutu. Szablony wpinają się w istniejącą architekturę
+bez jej zmiany.
+
+Uwaga techniczna: szablony używają klasycznych `DataBindings`, nie `ExpressionBindings`.
+Kod, który inspekcjonuje układ (np. odczyt kolumn z zapisanego raportu), musi patrzeć w oba
+miejsca.
+
+## Przepis integracyjny dla nas
+
+Nowe narzędzie AI, np. `build_invoice_report(entityName, templateName, mapping, filterCriteria)`:
+
+```
+1. type   = ResolveRuntimeType(entityName)                  // mamy
+2. rows   = scope.Os.GetObjects(type, criteria)             // mamy, wariant C dowiedziony
+3. fields = mapping.Select(m => TemplateField(kind, category, type) { Value=pole, IsBindingValue=true })
+4. target = new XtraReport { DataSource = rows }
+   new TemplateReportBuilder(target, szablon, fields, opcje, unit).Execute()
+5. render: CreateDocument + ExportToImage          -> podgląd w czacie (mamy)
+6. zapis:  target.DataSource = new CollectionDataSource { ObjectTypeName = type.FullName }
+           storage.SaveReport(reportData, target)  -> ReportDataV2 (mamy)
+```
+
+Kroki 1, 2, 5 i 6 są już napisane w `SchemaAIToolsProvider`. Nowe są tylko 3 i 4.
+
+**Zadanie modelu redukuje się do mapowania pól encji na 32 nazwane sloty** — zbiór zamknięty,
+walidacja to sprawdzenie, czy slot jest w `TemplateFieldKind`. To znacznie pewniejsze niż
+generowanie pasm i wyrażeń.
+
+**Walidacja typów do dopisania:** sloty mają oczekiwane typy (`Quantity`, `UnitPrice` →
+liczbowe; `InvoiceDate` → `DateTime`). Nasze `SupportedTypes` dopuszcza String, Int32, Int64,
+Decimal, Double, Single, Boolean, DateTime, Guid, Byte[], Reference — mapowanie powinno
+odrzucać np. `String` wpięty w `Quantity`, zamiast renderować śmieci.
+
+## Czego nadal nie sprawdziłem
+
+- Zapisu przez **prawdziwe** `IReportStorage.SaveReport` w działającym XAF-ie (testowałem
+  `SaveLayoutToXml`, czyli ten sam serializator, ale poza XAF-em) i otwarcia w projektancie.
+- Czy sloty `Tax` / `Discount` liczą polski VAT zgodnie z przepisami.
+- Zachowania przy polach `Reference` (np. `Faktura.Customer.NazwaKlienta`) — moje testy
+  używały pól płaskich. Ścieżki kropkowane w `TemplateField.Value` to niewiadoma.

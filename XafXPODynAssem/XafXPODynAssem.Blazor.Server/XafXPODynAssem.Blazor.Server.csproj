@@ -28,6 +28,7 @@
     <PackageReference Include="DevExpress.ExpressApp.Office.Blazor" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.ReportsV2.Blazor" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.Scheduler.Blazor" Version="26.1.4" />
+    <PackageReference Include="DevExpress.ExpressApp.StateMachine" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.Security.Xpo" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.Validation.Blazor" Version="26.1.4" />
     <PackageReference Include="DevExpress.ExpressApp.WebApi" Version="26.1.4" />

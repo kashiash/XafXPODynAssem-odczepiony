@@ -92,6 +92,9 @@ namespace XafXPODynAssem.Module
             AdditionalExportedTypes.Add(typeof(BusinessObjects.SchemaHistory));
             AdditionalExportedTypes.Add(typeof(BusinessObjects.AIChat));
             AdditionalExportedTypes.Add(typeof(BusinessObjects.UserHubPreference));
+            AdditionalExportedTypes.Add(typeof(BusinessObjects.WorkflowDefinition));
+            AdditionalExportedTypes.Add(typeof(BusinessObjects.WorkflowState));
+            AdditionalExportedTypes.Add(typeof(BusinessObjects.WorkflowTransition));
             RequiredModuleTypes.Add(typeof(DevExpress.ExpressApp.SystemModule.SystemModule));
             RequiredModuleTypes.Add(typeof(DevExpress.ExpressApp.Security.SecurityModule));
             RequiredModuleTypes.Add(typeof(DevExpress.ExpressApp.ConditionalAppearance.ConditionalAppearanceModule));

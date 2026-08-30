@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+const BASE = process.env.PW_BASE || 'https://mordeczka.fleetman.com.pl';
+const b = await chromium.launch({ headless: true });
+const ctx = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1500, height: 1100 } });
+const p = await ctx.newPage();
+p.on('console', m => console.log('KONSOLA', m.type(), m.text().slice(0,180)));
+p.on('response', r => { if (r.status() >= 400) console.log('HTTP', r.status(), r.url().slice(0,110)); });
+await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+await p.waitForTimeout(9000);
+console.log('URL:', p.url());
+console.log('TEKST:', (await p.evaluate(() => document.body.innerText)).slice(0, 400).replace(/\n+/g,' | '));
+console.log('INPUTY:', await p.locator('input').count(), '| PRZYCISKI:', await p.locator('button').count());
+await p.screenshot({ path: '/Users/jacek/Projects/Brekhof/zrzuty-mordeczka/sonda.png', fullPage: true });
+await b.close();

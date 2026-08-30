@@ -65,6 +65,13 @@ namespace XafXPODynAssem.Blazor.Server
                         options.ReportStoreMode = DevExpress.ExpressApp.ReportsV2.ReportStoreModes.XML;
                     })
                     .AddScheduler()
+                    // Przeplywy (maszyny stanow) dla encji runtime. Wlasny magazyn zamiast
+                    // wbudowanego XpoStateMachine — patrz komentarz w BusinessObjects/Workflow.cs.
+                    .AddStateMachine(options =>
+                    {
+                        options.StateMachineStorageType =
+                            typeof(XafXPODynAssem.Module.BusinessObjects.WorkflowDefinition);
+                    })
                     .AddValidation(options =>
                     {
                         options.AllowValidationDetailsAccess = false;

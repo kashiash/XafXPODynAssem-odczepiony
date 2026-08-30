@@ -1228,6 +1228,9 @@ public sealed class SchemaAIToolsProvider
                 return "Error: report storage is not available (ReportsModuleV2 not configured?).";
 
             storage.SaveReport(reportData, report);
+            // Bez tej flagi raport NIE trafia do akcji „Pokaz na raporcie" na widokach encji —
+            // InplaceReportCacheHelperService pobiera wylacznie ReportDataV2 z IsInplaceReport = true.
+            reportData.IsInplaceReport = true;
             scope.Os.CommitChanges();
 
             var key = scope.Os.GetKeyValue(reportData)?.ToString();
@@ -1258,6 +1261,9 @@ public sealed class SchemaAIToolsProvider
             result.AppendLine($"- Report key: `{key}`");
             result.AppendLine();
             result.AppendLine("Open the **Reports** navigation item to preview it or adjust the layout in the designer.");
+            result.AppendLine("The report is marked as inplace. Tell the user to refresh the page (F5) — "
+                              + "the inplace report cache is built once per Blazor circuit, so the "
+                              + "**Pokaz na raporcie** action on the entity's views picks it up only after a reload.");
             return result.ToString();
         }
         catch (Exception ex)
@@ -1782,6 +1788,8 @@ public sealed class SchemaAIToolsProvider
                 var storage = DevExpress.ExpressApp.ReportsV2.ReportDataProvider.GetReportStorage(saveScope.ServiceProvider);
                 if (storage == null) return "Error: report storage is not available.";
                 storage.SaveReport(reportData, forSave);
+                // Patrz build_report: bez IsInplaceReport raport nie pojawi sie w „Pokaz na raporcie".
+                reportData.IsInplaceReport = true;
                 saveScope.Os.CommitChanges();
                 savedKey = saveScope.Os.GetKeyValue(reportData)?.ToString();
                 _logger.LogInformation(
@@ -1789,7 +1797,8 @@ public sealed class SchemaAIToolsProvider
                     savedKey, reportData.DataTypeName);
                 forSave.Dispose();
             }
-            output.AppendLine($"Zapisano do listy Raporty (klucz `{savedKey}`).");
+            output.AppendLine($"Zapisano do listy Raporty (klucz `{savedKey}`), oznaczony jako inplace. "
+                              + "Odswiez strone (F5), zeby raport pojawil sie w akcji „Pokaz na raporcie” na widokach encji.");
 
             if (render)
             {

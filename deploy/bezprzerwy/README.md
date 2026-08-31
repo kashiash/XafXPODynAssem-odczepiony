@@ -116,6 +116,34 @@ widoczność) nie zmienia ich liczby. Dlatego odcisk, a nie licznik.
    tak samo zepsute; restart zamieniłby jedną złą replikę w pętlę restartów. Walidacja
    idzie przez `ValidateCompilation`, czyli tę samą ścieżkę, co wdrożenie z interfejsu.
 
+### Czwarty warunek: nie w środku czyjejś pracy
+
+Restart zrywa obwód Blazora. Strona wraca sama i użytkownik zostaje zalogowany, ale
+**niezapisana treść formularza przepada**. Przy trzech replikach byłyby to trzy takie
+przerwania po kolei.
+
+Dlatego replika przed restartem robi dwie rzeczy:
+
+1. **Przestaje przyjmować nowych.** `ReplicaDrainMiddleware` oddaje 503 na wejścia na
+   stronę. Rozdzielacz po dwóch takich odpowiedziach odstawia replikę sam
+   (`max_fails=2`) i kieruje nowych do pozostałych. **Kontener niczego nginxowi nie
+   mówi** — nie ma do niego dostępu ani do jego konfiguracji. Sygnalizuje zachowaniem,
+   a nie komunikatem.
+2. **Czeka, aż obecni skończą.** Ruchu trwających obwodów (`/_blazor`, `/_framework`,
+   `/_content`) wygaszanie nie dotyka — odcięcie go byłoby dokładnie tym zerwaniem,
+   któremu zapobiegamy.
+
+Czeka do `REPLIKA_CIERPLIWOSC` sekund, potem restartuje mimo to: jedna zapomniana karta
+w przeglądarce trzymałaby replikę na starym modelu bez końca.
+
+Nagłówki `X-Obwody` i `X-Wygaszanie` pokazują stan repliki bez czekania na restart.
+
+**Pułapka, na którą się nadziałem.** Pierwsza wersja licznika liczyła w górę na
+połączeniu i w dół na rozłączeniu. Przy jednej żywej sesji pokazywała **-1**:
+rozłączenia przychodziły, odpowiadające im połączenia nie. Teraz to zbiór
+identyfikatorów obwodów — dopisanie tego samego dwa razy nic nie zmienia, a usunięcie
+nieznanego nie zbija stanu poniżej zera.
+
 ### Zmienne środowiska
 
 | Zmienna | Rola |
@@ -125,6 +153,7 @@ widoczność) nie zmienia ich liczby. Dlatego odcisk, a nie licznik.
 | `REPLIKA_ODSTEP` | sekundy między kolejnymi replikami (domyślnie 90) |
 | `REPLIKA_SONDA` | co ile sekund liczymy odcisk (domyślnie 15) |
 | `REPLIKA_ROZBIEG` | zwłoka po starcie, zanim zaczniemy pilnować (domyślnie 60) |
+| `REPLIKA_CIERPLIWOSC` | ile sekund czekamy, aż pracujący skończą (domyślnie 300) |
 
 `trzy-repliki.sh` ustawia je sam.
 

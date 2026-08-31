@@ -31,6 +31,7 @@ declare -A INDEKS=( [red]=0 [green]=1 [blue]=2 )
 KOLEJNOSC=(red green blue)
 PEERS="http://127.0.0.1:8101,http://127.0.0.1:8102,http://127.0.0.1:8103"
 ODSTEP="${ODSTEP:-90}"        # sekundy miedzy restartami kolejnych replik
+CIERPLIWOSC="${CIERPLIWOSC:-300}"  # ile sekund czekamy, az pracujacy skoncza
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -50,6 +51,7 @@ for k in "${KOLEJNOSC[@]}"; do
     -e "REPLIKA_INDEKS=${INDEKS[$k]}" \
     -e "REPLIKA_PEERS=$PEERS" \
     -e "REPLIKA_ODSTEP=$ODSTEP" \
+    -e "REPLIKA_CIERPLIWOSC=$CIERPLIWOSC" \
     -e "ConnectionStrings__ConnectionString=XpoProvider=Postgres;Host=localhost;Port=5432;Database=$BAZA;Username=postgres;Password=" \
     -e 'AI__BaseUrl=https://polandcentral.api.cognitive.microsoft.com/openai' \
     -e 'AI__ApiKeys__openai=' \

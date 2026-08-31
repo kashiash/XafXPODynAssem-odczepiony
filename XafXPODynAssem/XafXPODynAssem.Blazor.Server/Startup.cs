@@ -181,6 +181,9 @@ namespace XafXPODynAssem.Blazor.Server
                 app.UseExceptionHandler("/Error");
                 app.UseHsts();
             }
+            // Wygaszanie repliki przed restartem — musi byc pierwsze w potoku, zeby
+            // odciac nowe wejscia zanim cokolwiek zaczniemy dla nich robic.
+            app.UseMiddleware<ReplicaDrainMiddleware>();
             app.UseHttpsRedirection();
             app.UseRequestLocalization();
             app.UseStaticFiles();

@@ -23,6 +23,11 @@ namespace XafXPODynAssem.Blazor.Server.Services
     ///    z pozostalych odpowiada. Jesli nie — czeka, zamiast dolozyc sie do przerwy.
     /// 3. Tylko przy metadanych, ktore sie kompiluja. Zepsute metadane po restarcie
     ///    beda tak samo zepsute; restart zamienilby jedna zla replike w petle restartow.
+    /// 4. Nie w srodku czyjejs pracy. Restart zrywa obwod Blazora — strona wraca sama
+    ///    i zalogowana, ale niezapisana tresc formularza przepada. Replika wiec najpierw
+    ///    przestaje przyjmowac nowych, a potem czeka, az obecni skoncza. Czeka do
+    ///    CIERPLIWOSC sekund; pozniej restartuje mimo to, bo jedna zapomniana karta
+    ///    trzymalaby ja na starym modelu bez konca.
     ///
     /// Wlacza sie wylacznie, gdy ustawiono REPLIKA_INDEKS — pojedyncza instancja
     /// (dev, jeden kontener) dziala jak dotad, bez zadnego odpytywania.
@@ -34,10 +39,19 @@ namespace XafXPODynAssem.Blazor.Server.Services
     ///   REPLIKA_ODSTEP  sekundy miedzy kolejnymi replikami (domyslnie 90)
     ///   REPLIKA_SONDA   co ile sekund liczymy odcisk (domyslnie 15)
     ///   REPLIKA_ROZBIEG sekundy zwloki po starcie, zanim zaczniemy pilnowac (domyslnie 60)
+    ///   REPLIKA_CIERPLIWOSC ile sekund czekamy, az pracujacy skoncza (domyslnie 300)
     /// </summary>
     public static class ReplicaSyncService
     {
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(4) };
+
+        private static volatile bool _wygaszamy;
+
+        /// <summary>
+        /// Czy replika szykuje sie do restartu i nie chce juz nowych osob.
+        /// Czyta to <see cref="ReplicaDrainMiddleware"/>.
+        /// </summary>
+        public static bool Wygaszamy => _wygaszamy;
 
         public static void Start()
         {
@@ -53,14 +67,15 @@ namespace XafXPODynAssem.Blazor.Server.Services
             var odstep = Sekundy("REPLIKA_ODSTEP", 90);
             var sonda = Sekundy("REPLIKA_SONDA", 15);
             var rozbieg = Sekundy("REPLIKA_ROZBIEG", 60);
+            var cierpliwosc = Sekundy("REPLIKA_CIERPLIWOSC", 300);
 
-            _ = Task.Run(() => Pilnuj(indeks, peers, odstep, sonda, rozbieg));
+            _ = Task.Run(() => Pilnuj(indeks, peers, odstep, sonda, rozbieg, cierpliwosc));
         }
 
         private static int Sekundy(string zmienna, int domyslnie)
             => int.TryParse(Environment.GetEnvironmentVariable(zmienna), out var v) && v > 0 ? v : domyslnie;
 
-        private static async Task Pilnuj(int indeks, string[] peers, int odstep, int sonda, int rozbieg)
+        private static async Task Pilnuj(int indeks, string[] peers, int odstep, int sonda, int rozbieg, int cierpliwosc)
         {
             var connStr = XafXPODynAssem.Module.XafXPODynAssemModule.RuntimeConnectionString;
             if (string.IsNullOrEmpty(connStr)) return;
@@ -124,10 +139,47 @@ namespace XafXPODynAssem.Blazor.Server.Services
                     continue;
                 }
 
+                await PoczekajAzNikogoNieBedzie(cierpliwosc);
+
                 Log("restartuje, zeby przejsc na nowy model (kod 42)");
                 RestartService.RequestRestart();
                 return;
             }
+        }
+
+        /// <summary>
+        /// Czeka, az na tej replice nikt nie pracuje. Restart zrywa obwod Blazora:
+        /// strona wraca sama i uzytkownik zostaje zalogowany, ale niezapisana praca
+        /// w otwartym formularzu przepada. Czekanie przenosi restart na moment, gdy
+        /// nikogo to nie kosztuje.
+        ///
+        /// Czekamy do skutku, ale nie bez konca: jedna zapomniana karta w przegladarce
+        /// trzymalaby replike na starym modelu w nieskonczonosc. Po CIERPLIWOSC sekund
+        /// restartujemy mimo wszystko — lepiej przerwac jednej osobie, niz zostawic
+        /// replike, ktora nie zna nowych encji.
+        /// </summary>
+        private static async Task PoczekajAzNikogoNieBedzie(int cierpliwosc)
+        {
+            // Od tej chwili nie przyjmujemy nowych osob: rozdzielacz po dwoch nieudanych
+            // probach odstawia te replike i kieruje nowych do pozostalych. Bez tego
+            // czekanie moglo by nie skonczyc sie nigdy, bo w miejsce osoby, ktora
+            // skonczyla, rozdzielacz przysylalby kolejna.
+            _wygaszamy = true;
+
+            if (CircuitHandlerProxy.ZywePolaczenia == 0) return;
+
+            Log($"na replice pracuje {CircuitHandlerProxy.ZywePolaczenia} os. — wygaszam i czekam do {cierpliwosc}s");
+            var koniec = DateTime.UtcNow.AddSeconds(cierpliwosc);
+            while (DateTime.UtcNow < koniec)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                if (CircuitHandlerProxy.ZywePolaczenia == 0)
+                {
+                    Log("nikt juz nie pracuje — restartuje bez przerywania komukolwiek");
+                    return;
+                }
+            }
+            Log($"po {cierpliwosc}s nadal pracuje {CircuitHandlerProxy.ZywePolaczenia} os. — restartuje mimo to");
         }
 
         /// <summary>

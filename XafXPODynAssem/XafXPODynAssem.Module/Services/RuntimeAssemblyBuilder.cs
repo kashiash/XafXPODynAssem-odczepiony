@@ -29,7 +29,7 @@ namespace XafXPODynAssem.Module.Services
             var syntaxTrees = new List<SyntaxTree>();
             foreach (var cc in classes)
             {
-                var source = GenerateSource(cc);
+                var source = GenerateSource(cc, classes);
                 result.GeneratedSources[cc.ClassName] = source;
                 syntaxTrees.Add(CSharpSyntaxTree.ParseText(source,
                     CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.CSharp12)));
@@ -70,7 +70,7 @@ namespace XafXPODynAssem.Module.Services
             var syntaxTrees = new List<SyntaxTree>();
             foreach (var cc in classes)
             {
-                var source = GenerateSource(cc);
+                var source = GenerateSource(cc, classes);
                 result.GeneratedSources[cc.ClassName] = source;
                 syntaxTrees.Add(CSharpSyntaxTree.ParseText(source,
                     CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.CSharp12)));
@@ -111,7 +111,7 @@ namespace XafXPODynAssem.Module.Services
             return result;
         }
 
-        public static string GenerateSource(RuntimeClassMetadata cc)
+        public static string GenerateSource(RuntimeClassMetadata cc, List<RuntimeClassMetadata> allClasses = null)
         {
             var sb = new StringBuilder();
             sb.AppendLine("using System;");
@@ -151,7 +151,7 @@ namespace XafXPODynAssem.Module.Services
             {
                 if (IsReferenceField(field))
                 {
-                    EmitReferenceProperty(sb, field);
+                    EmitReferenceProperty(sb, field, cc.ClassName);
                 }
                 else
                 {
@@ -160,10 +160,49 @@ namespace XafXPODynAssem.Module.Services
                 sb.AppendLine();
             }
 
+            EmitChildCollections(sb, cc, allClasses);
+
             sb.AppendLine("    }");
             sb.AppendLine("}");
 
             return sb.ToString();
+        }
+
+        private static string AssociationName(string ownerClassName, string fieldName)
+            => $"{ownerClassName}_{fieldName}";
+
+        // Strona "jeden" skojarzenia: dla kazdej klasy, ktora ma referencje do 'cc',
+        // wystawiamy XPCollection. Dzieki temu karta nadrzedna dostaje liste dzieci.
+        private static void EmitChildCollections(StringBuilder sb, RuntimeClassMetadata cc, List<RuntimeClassMetadata> allClasses)
+        {
+            if (allClasses == null) return;
+
+            // Nazwy juz zajete: wlasne pola i wczesniej wystawione kolekcje.
+            var zajete = new HashSet<string>(cc.Fields
+                .Where(f => !string.IsNullOrWhiteSpace(f.FieldName))
+                .Select(f => f.FieldName), StringComparer.Ordinal);
+            zajete.Add(cc.ClassName);
+
+            foreach (var dziecko in allClasses.OrderBy(c => c.ClassName))
+            {
+                foreach (var pole in dziecko.Fields
+                    .Where(f => IsReferenceField(f)
+                             && string.Equals(f.ReferencedClassName, cc.ClassName, StringComparison.Ordinal))
+                    .OrderBy(f => f.FieldName))
+                {
+                    // Nazwa mechaniczna. Ludzka nazwa to sprawa metadanych, nie generatora.
+                    var nazwa = dziecko.ClassName;
+                    if (zajete.Contains(nazwa))
+                        nazwa = $"{dziecko.ClassName}_{pole.FieldName}";
+                    if (zajete.Contains(nazwa)) continue;
+                    zajete.Add(nazwa);
+
+                    sb.AppendLine();
+                    sb.AppendLine($"        [Association(\"{AssociationName(dziecko.ClassName, pole.FieldName)}\")]");
+                    sb.AppendLine($"        public XPCollection<{dziecko.ClassName}> {nazwa}");
+                    sb.AppendLine($"            => GetCollection<{dziecko.ClassName}>(nameof({nazwa}));");
+                }
+            }
         }
 
         private static void EmitScalarProperty(StringBuilder sb, RuntimeFieldMetadata field)
@@ -195,7 +234,7 @@ namespace XafXPODynAssem.Module.Services
             sb.AppendLine("        }");
         }
 
-        private static void EmitReferenceProperty(StringBuilder sb, RuntimeFieldMetadata field)
+        private static void EmitReferenceProperty(StringBuilder sb, RuntimeFieldMetadata field, string ownerClassName)
         {
             var refTypeName = field.ReferencedClassName;
             var backingFieldName = ToCamelCase(field.FieldName);
@@ -205,6 +244,12 @@ namespace XafXPODynAssem.Module.Services
 
             // Attributes
             EmitFieldAttributes(sb, field);
+
+            // Strona "wiele" skojarzenia. Bez tego XPO widzi zwykla referencje i klasa
+            // nadrzedna nie ma jak wystawic kolekcji swoich dzieci — na karcie faktury
+            // nie bylo listy pozycji. Nazwa skojarzenia niesie klase i pole, wiec dwie
+            // rozne referencje z tej samej klasy do tej samej nadrzednej sie nie zderza.
+            sb.AppendLine($"        [Association(\"{AssociationName(ownerClassName, field.FieldName)}\")]");
 
             // Property with SetPropertyValue
             sb.AppendLine($"        public {refTypeName} {field.FieldName}");

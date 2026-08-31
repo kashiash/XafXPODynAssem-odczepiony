@@ -35,6 +35,19 @@ CIERPLIWOSC="${CIERPLIWOSC:-300}"  # ile sekund czekamy, az pracujacy skoncza
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
+# --- sekrety -----------------------------------------------------------------
+# Haslo do bazy i klucz do uslugi AI biora sie ze SRODOWISKA, nie z tego pliku.
+# To repozytorium jest publiczne; wpisany tu klucz bylby kluczem oglos zonym swiatu
+# w chwili wypchniecia. Ustaw je przed uruchomieniem, np. z pliku poza repozytorium:
+#
+#   set -a; . /opt/mordeczka/sekrety.env; set +a
+#   ./trzy-repliki.sh ...
+#
+HASLO_BAZY="${MORDECZKA_HASLO_BAZY:-}"
+KLUCZ_AI="${MORDECZKA_KLUCZ_AI:-}"
+[ -z "$HASLO_BAZY" ] && { echo "BRAK: ustaw MORDECZKA_HASLO_BAZY"; exit 2; }
+[ -z "$KLUCZ_AI" ]   && { echo "BRAK: ustaw MORDECZKA_KLUCZ_AI"; exit 2; }
+
 for k in "${KOLEJNOSC[@]}"; do
   PORT="${REPLIKI[$k]}"
   NAZWA="mordeczka-$k"
@@ -52,9 +65,9 @@ for k in "${KOLEJNOSC[@]}"; do
     -e "REPLIKA_PEERS=$PEERS" \
     -e "REPLIKA_ODSTEP=$ODSTEP" \
     -e "REPLIKA_CIERPLIWOSC=$CIERPLIWOSC" \
-    -e "ConnectionStrings__ConnectionString=XpoProvider=Postgres;Host=localhost;Port=5432;Database=$BAZA;Username=postgres;Password=" \
+    -e "ConnectionStrings__ConnectionString=XpoProvider=Postgres;Host=localhost;Port=5432;Database=$BAZA;Username=postgres;Password=$HASLO_BAZY" \
     -e 'AI__BaseUrl=https://polandcentral.api.cognitive.microsoft.com/openai' \
-    -e 'AI__ApiKeys__openai=' \
+    -e "AI__ApiKeys__openai=$KLUCZ_AI" \
     -e 'AI__DefaultProvider=openai' -e 'AI__Model=gpt-5.6-luna' \
     "$OBRAZ" >/dev/null || { log "BLAD: nie udalo sie uruchomic $NAZWA"; exit 1; }
 

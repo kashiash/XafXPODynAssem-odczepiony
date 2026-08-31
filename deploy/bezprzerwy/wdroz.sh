@@ -55,6 +55,19 @@ fi
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
+# --- sekrety -----------------------------------------------------------------
+# Haslo do bazy i klucz do uslugi AI biora sie ze SRODOWISKA, nie z tego pliku.
+# To repozytorium jest publiczne; wpisany tu klucz bylby kluczem oglos zonym swiatu
+# w chwili wypchniecia. Ustaw je przed uruchomieniem, np. z pliku poza repozytorium:
+#
+#   set -a; . /opt/mordeczka/sekrety.env; set +a
+#   ./wdroz.sh ...
+#
+HASLO_BAZY="${MORDECZKA_HASLO_BAZY:-}"
+KLUCZ_AI="${MORDECZKA_KLUCZ_AI:-}"
+[ -z "$HASLO_BAZY" ] && { echo "BRAK: ustaw MORDECZKA_HASLO_BAZY"; exit 2; }
+[ -z "$KLUCZ_AI" ]   && { echo "BRAK: ustaw MORDECZKA_KLUCZ_AI"; exit 2; }
+
 # --- ktora kopia jest teraz aktywna -----------------------------------------
 # Etykiet Dockera NIE da sie zmienic na dzialajacym kontenerze, wiec roli
 # "aktywny" nie zapiszemy w etykiecie po przelaczeniu. Aktywna kopie trzymamy
@@ -89,9 +102,9 @@ docker run -d --name "$NOWY" --network host --restart on-failure \
   -e "ASPNETCORE_URLS=http://+:$PORT_NOWY" \
   -e 'ASPNETCORE_ENVIRONMENT=Development' \
   -e 'XAF_UPDATE_DB=1' \
-  -e "ConnectionStrings__ConnectionString=XpoProvider=Postgres;Host=localhost;Port=5432;Database=$BAZA;Username=postgres;Password=" \
+  -e "ConnectionStrings__ConnectionString=XpoProvider=Postgres;Host=localhost;Port=5432;Database=$BAZA;Username=postgres;Password=$HASLO_BAZY" \
   -e 'AI__BaseUrl=https://polandcentral.api.cognitive.microsoft.com/openai' \
-  -e 'AI__ApiKeys__openai=' \
+  -e "AI__ApiKeys__openai=$KLUCZ_AI" \
   -e 'AI__DefaultProvider=openai' -e 'AI__Model=gpt-5.6-luna' \
   "$OBRAZ" >/dev/null || { log "BLAD: nie udalo sie uruchomic $NOWY"; exit 1; }
 

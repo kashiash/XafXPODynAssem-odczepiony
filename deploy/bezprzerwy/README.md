@@ -12,6 +12,25 @@ zostaje zatrzymana i służy do ewentualnego cofnięcia.
 | `upstream.conf` | jedna linia z adresem aktywnej kopii — to ona się podmienia |
 | `wdroz.sh` | całe wdrożenie: start, kontrola gotowości, przełączenie, wygaszenie starej |
 
+## Sekrety
+
+Hasło do bazy i klucz do usługi AI biorą się ze **środowiska**, nie ze skryptów.
+Repozytorium jest publiczne — klucz wpisany w skrypcie byłby kluczem ogłoszonym światu
+w chwili wypchnięcia.
+
+```bash
+# plik poza repozytorium, tryb 600
+cat /opt/mordeczka/sekrety.env
+#   MORDECZKA_HASLO_BAZY=...
+#   MORDECZKA_KLUCZ_AI=...
+
+set -a; . /opt/mordeczka/sekrety.env; set +a
+/opt/mordeczka/trzy-repliki.sh xpodyn:pasek XafXPODynAssem
+```
+
+Bez tych zmiennych skrypt odmawia startu, zamiast wstać z pustym hasłem i zostawić
+niedziałającą replikę do zdiagnozowania później.
+
 ## Uruchomienie przełącznika (raz)
 
 ```bash

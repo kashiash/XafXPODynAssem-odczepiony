@@ -42,6 +42,17 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$OBRAZ" ] && { echo "podaj obraz, np. ./wdroz.sh xpodyn:wznawianie"; exit 2; }
 
+# --- zabezpieczenie przed uzyciem na ukladzie trzech replik --------------------
+# Ten skrypt zna tylko uklad dwoch kopii na przemian. Na ukladzie red/green/blue
+# nadpisalby liste replik jednym wpisem, a sprzatanie na koncu usuneloby wszystkie
+# trzy kontenery (kazdy nosi etykiete aplikacja=mordeczka). Dlatego: jesli w liscie
+# replik jest wiecej niz jeden serwer, odmawiamy i odsylamy do wlasciwego skryptu.
+if [ -f "$UPSTREAM" ] && [ "$(grep -c '^[[:space:]]*server ' "$UPSTREAM")" -gt 1 ]; then
+  echo "ODMOWA: $UPSTREAM opisuje uklad wielu replik, a ten skrypt obsluguje tylko dwie kopie na przemian."
+  echo "Do wymiany obrazu przy trzech replikach uzyj: ./wymien-trojke.sh"
+  exit 3
+fi
+
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 # --- ktora kopia jest teraz aktywna -----------------------------------------

@@ -202,6 +202,10 @@ namespace XafXPODynAssem.Blazor.Server
             var lifetime = app.ApplicationServices.GetRequiredService<IHostApplicationLifetime>();
             RestartService.Configure(lifetime);
 
+            // Przy wielu replikach: pilnuj, zeby po Deploy Schema wykonanym na innej
+            // replice ta tez przeszla na nowy model. Bez REPLIKA_INDEKS nic nie robi.
+            ReplicaSyncService.Start();
+
             // Wire schema change orchestrator to SignalR hub + exit code 42 restart
             var hubContext = app.ApplicationServices.GetRequiredService<IHubContext<SchemaUpdateHub>>();
             var orchestrator = XafXPODynAssem.Module.Services.SchemaChangeOrchestrator.Instance;

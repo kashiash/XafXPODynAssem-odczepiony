@@ -90,9 +90,68 @@ ale **wylogowana**; ze wspólnymi — wraca zalogowana.
 - **Żywa sesja Blazora przy ubitej replice:** baner ponownego łączenia pokazał się,
   strona wróciła **sama po 6,0 s**, nadal zalogowana, na innej replice.
 
-## Czego ten układ NIE rozwiązuje
+## Deploy Schema przy trzech replikach
 
-Po `Deploy Schema` restartuje się **tylko ta replika**, z której wywołano wdrożenie.
-Pozostałe dwie chodzą dalej ze starym modelem runtime, dopóki ich nie zrestartujesz.
-Przy trzech replikach wdrożenie schematu wymaga więc restartu wszystkich trzech —
-inaczej użytkownik trafiający na starą replikę nie zobaczy nowej encji.
+Było tak: po `Deploy Schema` restartowała się **tylko ta replika**, z której wywołano
+wdrożenie. Pozostałe dwie chodziły dalej ze starym modelem, więc użytkownik, którego
+rozdzielacz skierował na starą replikę, nie widział nowej encji. Rozdzielacz kieruje
+po adresie klienta, więc kto raz trafił na starą, ten na niej zostawał.
+
+Teraz każda replika sama pilnuje, czy jej model jest aktualny (`ReplicaSyncService`
+w `Blazor.Server/Services`). Co kilkanaście sekund liczy **odcisk metadanych** — skrót
+ze wszystkich pól wszystkich klas runtime. Gdy odcisk się zmieni, replika wie, że inna
+wdrożyła schemat, i restartuje się tak samo jak przy własnym wdrożeniu (kod 42).
+
+Liczenie wierszy tu nie wystarcza: zmiana w miejscu (inny typ, inna nazwa, inna
+widoczność) nie zmienia ich liczby. Dlatego odcisk, a nie licznik.
+
+### Trzy warunki, bez których to by szkodziło
+
+1. **Nie naraz.** Gdyby wszystkie trzy zobaczyły zmianę w tej samej sekundzie, zgasłyby
+   jednocześnie — czyli dokładnie ta przerwa, dla której trzymamy trzy repliki.
+   Każda czeka swoją kolej: `REPLIKA_INDEKS` razy `REPLIKA_ODSTEP`.
+2. **Tylko przy żywym sąsiedzie.** Tuż przed restartem replika sprawdza, czy któraś
+   z pozostałych odpowiada. Jeśli nie — odkłada restart, zamiast dołożyć się do przerwy.
+3. **Tylko przy metadanych, które się kompilują.** Zepsute metadane po restarcie będą
+   tak samo zepsute; restart zamieniłby jedną złą replikę w pętlę restartów. Walidacja
+   idzie przez `ValidateCompilation`, czyli tę samą ścieżkę, co wdrożenie z interfejsu.
+
+### Zmienne środowiska
+
+| Zmienna | Rola |
+|---|---|
+| `REPLIKA_INDEKS` | numer w kolejce restartów, od 0. **Bez niej mechanizm śpi** — pojedyncza instancja działa jak dotąd |
+| `REPLIKA_PEERS` | adresy wszystkich replik po przecinku; własny adres rozpoznawany po porcie z `ASPNETCORE_URLS` |
+| `REPLIKA_ODSTEP` | sekundy między kolejnymi replikami (domyślnie 90) |
+| `REPLIKA_SONDA` | co ile sekund liczymy odcisk (domyślnie 15) |
+| `REPLIKA_ROZBIEG` | zwłoka po starcie, zanim zaczniemy pilnować (domyślnie 60) |
+
+`trzy-repliki.sh` ustawia je sam.
+
+### Co zostało zmierzone
+
+Miniak, LXC 200, baza `XafXPODynAssem`, `ODSTEP=45`. Nowa encja wstawiona do metadanych
+o 09:54:12. Repliki wstały z nowym modelem:
+
+| replika | numer w kolejce | wstała | od zmiany |
+|---|---|---|---|
+| red | 0 | 09:54:15 | 3 s |
+| green | 1 | 09:55:06 | 54 s |
+| blue | 2 | 09:55:56 | 104 s |
+
+Odcisk we wszystkich trzech logach przeszedł `E3B0C442 → BD14F9FF`. Tabela nowej encji
+powstała w bazie. **Ruch w trakcie całej kaskady: 986 żądań, 986 odpowiedzi 200,
+zero błędów.**
+
+## Czego to nadal NIE rozwiązuje
+
+**Wymiany obrazu przy trzech replikach.** `wdroz.sh` zna tylko układ dwóch kopii na
+przemian; uruchomiony na trójce nadpisałby listę replik jednym wpisem i skasował
+wszystkie trzy kontenery. Od teraz **odmawia** startu, gdy w liście replik jest więcej
+niż jeden serwer.
+
+Rolowanie replik po jednej przy nowym obrazie **nie jest bezpieczne**: nowy obraz może
+mieć inny generator, więc z tych samych metadanych zbuduje inny model — a wtedy dwie
+różne wersje piszą do jednego schematu. Właściwe rozwiązanie to wymiana całej trójki:
+nowa trójka wstaje obok na portach 8111–8113, jedno przeładowanie nginxa przepina
+cały upstream, dopiero potem stara trójka gaśnie. Zaprojektowane, jeszcze nie napisane.

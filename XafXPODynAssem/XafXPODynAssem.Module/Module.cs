@@ -277,6 +277,52 @@ namespace XafXPODynAssem.Module
             return string.Join(";", parts);
         }
 
+        /// <summary>
+        /// Odcisk metadanych: skrot ze wszystkich pol wszystkich klas runtime.
+        /// Po nim replika poznaje, ze INNA replika zmienila schemat i jej wlasny
+        /// model jest juz nieaktualny. Liczenie wierszy tu nie wystarcza — zmiana
+        /// w miejscu (inny typ, inna nazwa, inna widocznosc) nie zmienia ich liczby.
+        /// </summary>
+        public static string GetMetadataFingerprint(string connectionString)
+        {
+            return ComputeFingerprint(QueryMetadata(connectionString));
+        }
+
+        /// <summary>
+        /// Sprawdza, czy z obecnych metadanych da sie zbudowac model — bez ladowania go.
+        /// Replika wola to zanim zdecyduje sie na restart: jesli metadane sa zepsute,
+        /// restart wprowadzilby ja w petle zamiast naprawic.
+        /// </summary>
+        public static bool ValidateRuntimeMetadata(string connectionString, out string fingerprint, out List<string> errors)
+        {
+            var classes = QueryMetadata(connectionString);
+            fingerprint = ComputeFingerprint(classes);
+            var result = RuntimeAssemblyBuilder.ValidateCompilation(classes);
+            errors = result.Errors;
+            return result.Success;
+        }
+
+        internal static string ComputeFingerprint(List<RuntimeClassMetadata> classes)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in classes.OrderBy(c => c.ClassName, StringComparer.Ordinal))
+            {
+                sb.Append(c.ClassName).Append('|').Append(c.NavigationGroup).Append('|')
+                  .Append(c.IsApiExposed ? '1' : '0').Append('\n');
+                foreach (var f in c.Fields.OrderBy(f => f.FieldName, StringComparer.Ordinal))
+                {
+                    sb.Append("  ").Append(f.FieldName).Append('|').Append(f.TypeName).Append('|')
+                      .Append(f.ReferencedClassName).Append('|').Append(f.StringMaxLength).Append('|')
+                      .Append(f.IsRequired ? '1' : '0').Append(f.IsVisibleInListView ? '1' : '0')
+                      .Append(f.IsVisibleInDetailView ? '1' : '0').Append(f.IsEditable ? '1' : '0')
+                      .Append('|').Append(f.DisplayName).Append('\n');
+                }
+            }
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+            return Convert.ToHexString(hash);
+        }
+
         internal static List<RuntimeClassMetadata> QueryMetadata(string connectionString)
         {
             var classes = new List<RuntimeClassMetadata>();

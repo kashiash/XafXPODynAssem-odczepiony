@@ -15,6 +15,11 @@
 # na ekranie logowania. Sprawdzone: bez wspolnych kluczy strona wraca sama,
 # ale jako niezalogowana.
 #
+# Kazda replika dostaje REPLIKA_INDEKS i liste sasiadow. Po Deploy Schema wykonanym
+# na jednej replice pozostale rozpoznaja zmiane metadanych po odcisku i restartuja sie
+# same — po kolei, z odstepem ODSTEP sekund, i tylko gdy inna replika odpowiada.
+# Bez tego uzytkownik trafiajacy na stara replike nie zobaczylby nowej encji.
+#
 #   ./trzy-repliki.sh <obraz> [baza]
 #
 set -uo pipefail
@@ -22,7 +27,10 @@ set -uo pipefail
 OBRAZ="${1:-xpodyn:wznawianie}"
 BAZA="${2:-XafXPODynAssem}"
 declare -A REPLIKI=( [red]=8101 [green]=8102 [blue]=8103 )
+declare -A INDEKS=( [red]=0 [green]=1 [blue]=2 )
 KOLEJNOSC=(red green blue)
+PEERS="http://127.0.0.1:8101,http://127.0.0.1:8102,http://127.0.0.1:8103"
+ODSTEP="${ODSTEP:-90}"        # sekundy miedzy restartami kolejnych replik
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -38,6 +46,10 @@ for k in "${KOLEJNOSC[@]}"; do
     -e "ASPNETCORE_URLS=http://+:$PORT" \
     -e 'ASPNETCORE_ENVIRONMENT=Development' \
     -e 'XAF_UPDATE_DB=1' \
+    -e "REPLIKA=$k" \
+    -e "REPLIKA_INDEKS=${INDEKS[$k]}" \
+    -e "REPLIKA_PEERS=$PEERS" \
+    -e "REPLIKA_ODSTEP=$ODSTEP" \
     -e "ConnectionStrings__ConnectionString=XpoProvider=Postgres;Host=localhost;Port=5432;Database=$BAZA;Username=postgres;Password=" \
     -e 'AI__BaseUrl=https://polandcentral.api.cognitive.microsoft.com/openai' \
     -e 'AI__ApiKeys__openai=' \

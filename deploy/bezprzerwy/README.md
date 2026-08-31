@@ -52,3 +52,47 @@ się do cofnięcia; działająca obok nowej — nie.
 Przerwy przy **Deploy Schema** wywołanym z aplikacji. Tam użytkownik sam zmienia
 schemat i restart jest z definicji. To jest rozwiązane osobno: strona wraca sama,
 bez odświeżania (`_Host.cshtml`, commit `75f9bab`).
+
+---
+
+# Trzy repliki za rozdzielaczem (red / green / blue)
+
+`trzy-repliki.sh` uruchamia trzy kopie aplikacji na portach 8101–8103, a nginx
+(`nginx-lb.conf` + `upstream-lb.conf`) rozdziela między nie ruch na porcie 8090.
+
+```bash
+docker volume create mordeczka-keys
+/opt/mordeczka/trzy-repliki.sh xpodyn:wznawianie XafXPODynAssem
+```
+
+## Trzy rzeczy, bez których to nie działa
+
+**1. `ip_hash` w upstreamie.** Blazor wiąże obwód SignalR z konkretnym procesem.
+Zwykłe round-robin wysłałoby negocjację na jedną replikę, a WebSocket na drugą —
+strona wisiałaby na banerze ponownego łączenia.
+
+**2. `proxy_set_header Host $http_host`, a nie `$host`.** `$host` gubi numer portu,
+więc aplikacja budowała przekierowanie na `http://localhost/LoginPage` bez portu
+i przeglądarka dostawała `ERR_CONNECTION_REFUSED`. Na porcie 80/443 tego nie widać —
+wychodzi dopiero przy niestandardowym porcie.
+
+**3. Wspólny wolumen kluczy ochrony danych** (`mordeczka-keys` na
+`/root/.aspnet/DataProtection-Keys`). Bez niego ciasteczko logowania wystawione
+przez jedną replikę jest nieczytelne dla pozostałych i po przełączeniu użytkownik
+ląduje na ekranie logowania. Zmierzone: bez wspólnych kluczy strona wracała sama,
+ale **wylogowana**; ze wspólnymi — wraca zalogowana.
+
+## Co zostało zmierzone
+
+- **Ruch HTTP przy ubitej replice:** 210 żądań, 210 odpowiedzi 200, **zero błędów**.
+  W nagłówku `X-Kopia` widać `8103, 8102` — nginx próbował martwej repliki i przekazał
+  żądanie żywej w obrębie tego samego żądania.
+- **Żywa sesja Blazora przy ubitej replice:** baner ponownego łączenia pokazał się,
+  strona wróciła **sama po 6,0 s**, nadal zalogowana, na innej replice.
+
+## Czego ten układ NIE rozwiązuje
+
+Po `Deploy Schema` restartuje się **tylko ta replika**, z której wywołano wdrożenie.
+Pozostałe dwie chodzą dalej ze starym modelem runtime, dopóki ich nie zrestartujesz.
+Przy trzech replikach wdrożenie schematu wymaga więc restartu wszystkich trzech —
+inaczej użytkownik trafiający na starą replikę nie zobaczy nowej encji.

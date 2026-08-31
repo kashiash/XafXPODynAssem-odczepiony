@@ -158,7 +158,7 @@ namespace XafXPODynAssem.Blazor.Server
                 c.EnableAnnotations();
                 c.SwaggerDoc("v1", new OpenApiInfo
                 {
-                    Title = "XafXPODynAssem API",
+                    Title = "Mordeczka API",
                     Version = "v1",
                     Description = "OData REST API for runtime and compiled entities"
                 });

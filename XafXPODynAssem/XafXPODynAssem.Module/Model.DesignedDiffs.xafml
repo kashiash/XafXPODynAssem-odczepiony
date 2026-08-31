@@ -1,5 +1,5 @@
 <?xml version="1.0" ?>
-<Application Title="XafXPODynAssem">
+<Application Title="Mordeczka">
   <BOModel>
     <Class Name="DevExpress.Persistent.BaseImpl.PermissionPolicy.PermissionPolicyUser" Caption="Base User" />
   </BOModel>

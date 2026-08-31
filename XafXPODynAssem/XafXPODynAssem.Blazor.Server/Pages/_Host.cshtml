@@ -40,6 +40,55 @@
 
     <script src="_framework/blazor.server.js"></script>
     <script>
+        // Samoczynny powrot po Deploy Schema.
+        //
+        // Deploy konczy proces kodem 42 i serwer wstaje na nowo w kilkanascie sekund,
+        // ale wraz z nim ginie obwod Blazora. Proba wznowienia laczy sie wiec z czyms,
+        // czego juz nie ma, i domyslny baner „Could not reconnect" zostaje na ekranie
+        // az do recznego odswiezenia. Ponizsze doklada brakujacy krok: kiedy baner
+        // wisi, odpytujemy serwer i przeladowujemy strone, gdy tylko odpowie.
+        //
+        // Zwykle mrugniecie sieci obsluguje sam Blazor — dlatego czekamy chwile (GRACJA)
+        // i rezygnujemy, jesli baner zniknie sam. Przeladowujemy dopiero, gdy serwer
+        // odpowiada, wiec uzytkownik nie trafia na strone bledu.
+        (function () {
+            var GRACJA = 4000;      // ile baner musi wisiec, zanim uznamy obwod za stracony
+            var ODSTEP = 1500;      // co ile pytamy serwer
+            var LIMIT = 180000;     // po tylu ms przestajemy probowac
+            var odkad = null, wznawiamy = false;
+
+            function banerWisi() {
+                var el = document.getElementById('components-reconnect-modal');
+                if (el && getComputedStyle(el).display !== 'none') return true;
+                // XAF/DevExpress potrafi pokazac wlasny komunikat zamiast domyslnego
+                return /Could not reconnect|Nie można ponownie połączyć/i.test(document.body.innerText);
+            }
+
+            function czekajNaSerwerIWznow() {
+                if (wznawiamy) return;
+                wznawiamy = true;
+                var start = Date.now();
+                (function pytaj() {
+                    if (!banerWisi()) { wznawiamy = false; odkad = null; return; }   // wrocil sam
+                    if (Date.now() - start > LIMIT) { wznawiamy = false; return; }
+                    fetch(document.baseURI, { method: 'GET', cache: 'no-store' })
+                        .then(function (r) {
+                            if (r.ok) { location.reload(); } else { setTimeout(pytaj, ODSTEP); }
+                        })
+                        .catch(function () { setTimeout(pytaj, ODSTEP); });
+                })();
+            }
+
+            setInterval(function () {
+                if (banerWisi()) {
+                    if (odkad === null) odkad = Date.now();
+                    else if (Date.now() - odkad >= GRACJA) czekajNaSerwerIWznow();
+                } else {
+                    odkad = null;
+                }
+            }, 1000);
+        })();
+
         window.schemaFile = {
             download: function (fileName, content) {
                 var blob = new Blob([content], { type: 'application/json' });

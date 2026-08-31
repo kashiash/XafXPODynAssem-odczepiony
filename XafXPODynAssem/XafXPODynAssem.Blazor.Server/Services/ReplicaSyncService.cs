@@ -25,9 +25,18 @@ namespace XafXPODynAssem.Blazor.Server.Services
     ///    beda tak samo zepsute; restart zamienilby jedna zla replike w petle restartow.
     /// 4. Nie w srodku czyjejs pracy. Restart zrywa obwod Blazora — strona wraca sama
     ///    i zalogowana, ale niezapisana tresc formularza przepada. Replika wiec najpierw
-    ///    przestaje przyjmowac nowych, a potem czeka, az obecni skoncza. Czeka do
-    ///    CIERPLIWOSC sekund; pozniej restartuje mimo to, bo jedna zapomniana karta
-    ///    trzymalaby ja na starym modelu bez konca.
+    ///    przestaje przyjmowac nowych, a potem czeka na SPOKOJNA CHWILE: moment, gdy
+    ///    nikogo nie ma albo nikt nic nie robi od BEZCZYNNOSC sekund.
+    ///
+    ///    Czekanie na "az wszyscy skoncza" nie dziala: kto pracuje godzine, ten pracuje
+    ///    godzine, a modelu nie mozna trzymac rozjechanego bez konca. Liczy sie wiec
+    ///    ostatnia czynnosc, a nie sama obecnosc — otwarta karta, w ktorej nikt nic nie
+    ///    robi, restartu nie blokuje, a osoba w trakcie wpisywania go odsuwa.
+    ///
+    ///    Gdy spokojna chwila nie nadejdzie do CIERPLIWOSC sekund, restartujemy mimo to.
+    ///    Ale nie po cichu: od poczatku wygaszania strona pokazuje odliczanie, wiec
+    ///    czlowiek wie, ile ma czasu na zapisanie, zamiast dowiadywac sie o restarcie
+    ///    po stracie tresci.
     ///
     /// Wlacza sie wylacznie, gdy ustawiono REPLIKA_INDEKS — pojedyncza instancja
     /// (dev, jeden kontener) dziala jak dotad, bez zadnego odpytywania.
@@ -39,13 +48,43 @@ namespace XafXPODynAssem.Blazor.Server.Services
     ///   REPLIKA_ODSTEP  sekundy miedzy kolejnymi replikami (domyslnie 90)
     ///   REPLIKA_SONDA   co ile sekund liczymy odcisk (domyslnie 15)
     ///   REPLIKA_ROZBIEG sekundy zwloki po starcie, zanim zaczniemy pilnowac (domyslnie 60)
-    ///   REPLIKA_CIERPLIWOSC ile sekund czekamy, az pracujacy skoncza (domyslnie 300)
+    ///   REPLIKA_CIERPLIWOSC do ilu sekund czekamy na spokojna chwile (domyslnie 300)
+    ///   REPLIKA_BEZCZYNNOSC po ilu sekundach bez czynnosci uznajemy chwile za spokojna (domyslnie 45)
     /// </summary>
     public static class ReplicaSyncService
     {
         private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(4) };
 
         private static volatile bool _wygaszamy;
+        private static long _ostatniaCzynnosc = DateTime.UtcNow.Ticks;
+        private static long _terminRestartu;
+
+        /// <summary>
+        /// Zglasza, ze ktos wlasnie cos na tej replice zrobil. Wola to strona,
+        /// bo praca w Blazorze idzie gniazdem, ktorego serwer HTTP nie widzi.
+        /// </summary>
+        public static void ZglosCzynnosc()
+            => Interlocked.Exchange(ref _ostatniaCzynnosc, DateTime.UtcNow.Ticks);
+
+        /// <summary>Ile sekund od ostatniej czynnosci kogokolwiek na tej replice.</summary>
+        public static int SekundOdCzynnosci
+            => (int)(DateTime.UtcNow - new DateTime(Interlocked.Read(ref _ostatniaCzynnosc), DateTimeKind.Utc)).TotalSeconds;
+
+        /// <summary>
+        /// Ile sekund zostalo do restartu, ktorego juz nie odwlekamy. Zero, gdy nie
+        /// szykujemy restartu. Strona pokazuje to jako odliczanie, zeby czlowiek
+        /// zdazyl zapisac prace zamiast dowiadywac sie o restarcie po jej stracie.
+        /// </summary>
+        public static int SekundDoRestartu
+        {
+            get
+            {
+                var termin = Interlocked.Read(ref _terminRestartu);
+                if (termin == 0) return 0;
+                var zostalo = (int)(new DateTime(termin, DateTimeKind.Utc) - DateTime.UtcNow).TotalSeconds;
+                return zostalo > 0 ? zostalo : 0;
+            }
+        }
 
         /// <summary>
         /// Czy replika szykuje sie do restartu i nie chce juz nowych osob.
@@ -68,14 +107,15 @@ namespace XafXPODynAssem.Blazor.Server.Services
             var sonda = Sekundy("REPLIKA_SONDA", 15);
             var rozbieg = Sekundy("REPLIKA_ROZBIEG", 60);
             var cierpliwosc = Sekundy("REPLIKA_CIERPLIWOSC", 300);
+            var bezczynnosc = Sekundy("REPLIKA_BEZCZYNNOSC", 45);
 
-            _ = Task.Run(() => Pilnuj(indeks, peers, odstep, sonda, rozbieg, cierpliwosc));
+            _ = Task.Run(() => Pilnuj(indeks, peers, odstep, sonda, rozbieg, cierpliwosc, bezczynnosc));
         }
 
         private static int Sekundy(string zmienna, int domyslnie)
             => int.TryParse(Environment.GetEnvironmentVariable(zmienna), out var v) && v > 0 ? v : domyslnie;
 
-        private static async Task Pilnuj(int indeks, string[] peers, int odstep, int sonda, int rozbieg, int cierpliwosc)
+        private static async Task Pilnuj(int indeks, string[] peers, int odstep, int sonda, int rozbieg, int cierpliwosc, int bezczynnosc)
         {
             var connStr = XafXPODynAssem.Module.XafXPODynAssemModule.RuntimeConnectionString;
             if (string.IsNullOrEmpty(connStr)) return;
@@ -139,7 +179,7 @@ namespace XafXPODynAssem.Blazor.Server.Services
                     continue;
                 }
 
-                await PoczekajAzNikogoNieBedzie(cierpliwosc);
+                await PoczekajNaDobryMoment(cierpliwosc, bezczynnosc);
 
                 Log("restartuje, zeby przejsc na nowy model (kod 42)");
                 RestartService.RequestRestart();
@@ -158,28 +198,35 @@ namespace XafXPODynAssem.Blazor.Server.Services
         /// restartujemy mimo wszystko — lepiej przerwac jednej osobie, niz zostawic
         /// replike, ktora nie zna nowych encji.
         /// </summary>
-        private static async Task PoczekajAzNikogoNieBedzie(int cierpliwosc)
+        private static async Task PoczekajNaDobryMoment(int cierpliwosc, int bezczynnosc)
         {
             // Od tej chwili nie przyjmujemy nowych osob: rozdzielacz po dwoch nieudanych
             // probach odstawia te replike i kieruje nowych do pozostalych. Bez tego
             // czekanie moglo by nie skonczyc sie nigdy, bo w miejsce osoby, ktora
             // skonczyla, rozdzielacz przysylalby kolejna.
             _wygaszamy = true;
+            Interlocked.Exchange(ref _terminRestartu, DateTime.UtcNow.AddSeconds(cierpliwosc).Ticks);
 
             if (CircuitHandlerProxy.ZywePolaczenia == 0) return;
 
-            Log($"na replice pracuje {CircuitHandlerProxy.ZywePolaczenia} os. — wygaszam i czekam do {cierpliwosc}s");
+            Log($"na replice jest {CircuitHandlerProxy.ZywePolaczenia} os. — wygaszam, czekam na spokojna chwile (do {cierpliwosc}s)");
             var koniec = DateTime.UtcNow.AddSeconds(cierpliwosc);
             while (DateTime.UtcNow < koniec)
             {
                 await Task.Delay(TimeSpan.FromSeconds(5));
+
                 if (CircuitHandlerProxy.ZywePolaczenia == 0)
                 {
-                    Log("nikt juz nie pracuje — restartuje bez przerywania komukolwiek");
+                    Log("nikogo juz nie ma — restartuje bez przerywania komukolwiek");
+                    return;
+                }
+                if (SekundOdCzynnosci >= bezczynnosc)
+                {
+                    Log($"nikt nic nie robi od {SekundOdCzynnosci}s — restartuje w spokojnej chwili");
                     return;
                 }
             }
-            Log($"po {cierpliwosc}s nadal pracuje {CircuitHandlerProxy.ZywePolaczenia} os. — restartuje mimo to");
+            Log($"po {cierpliwosc}s ktos nadal pracuje — restartuje mimo to (byl uprzedzony odliczaniem)");
         }
 
         /// <summary>

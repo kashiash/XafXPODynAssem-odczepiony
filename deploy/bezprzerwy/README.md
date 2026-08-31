@@ -133,10 +133,32 @@ Dlatego replika przed restartem robi dwie rzeczy:
    `/_content`) wygaszanie nie dotyka — odcięcie go byłoby dokładnie tym zerwaniem,
    któremu zapobiegamy.
 
-Czeka do `REPLIKA_CIERPLIWOSC` sekund, potem restartuje mimo to: jedna zapomniana karta
-w przeglądarce trzymałaby replikę na starym modelu bez końca.
+**Czekanie „aż wszyscy skończą" nie działa.** Kto pracuje godzinę, ten pracuje godzinę,
+a modelu nie da się trzymać rozjechanego bez końca. Dlatego replika czeka nie na koniec
+pracy, tylko na **spokojną chwilę**: moment, gdy nikogo nie ma albo nikt nic nie robi od
+`REPLIKA_BEZCZYNNOSC` sekund. Liczy się ostatnia czynność, a nie sama obecność — karta
+otwarta od rana, w której nikt nic nie robi, restartu nie blokuje.
+
+Praca w Blazorze idzie gniazdem, którego serwer HTTP nie widzi, więc strona sama melduje
+się co 15 s pod `/replika/puls` i przy okazji dowiaduje się, ile zostało do restartu.
+
+**Gdy spokojna chwila nie nadejdzie do `REPLIKA_CIERPLIWOSC` sekund — restartujemy mimo
+to, ale nie po cichu.** Od początku wygaszania strona pokazuje pasek z odliczaniem:
+*„Aplikacja zaktualizuje się za X s. Zapisz pracę."* Restartu nie unikniemy, ale
+ostrzeżenie zamienia stratę w zapisanie.
 
 Nagłówki `X-Obwody` i `X-Wygaszanie` pokazują stan repliki bez czekania na restart.
+
+### Wylogowanie po bezczynności
+
+Po 10 minutach bez czynności strona ostrzega przez minutę, a potem wychodzi przez
+`/Logout` (wzorzec z HIS: `application.LogOff()`, skasowanie ciasteczek uwierzytelnienia
+i przekierowanie na `/LoginPage`). Samo skasowanie ciasteczka nie wystarcza — sesja XAF
+żyje po stronie serwera.
+
+Dla replik ma to skutek uboczny, który jest dokładnie tym, o co chodzi: **porzucona karta
+sama zwalnia replikę**, więc restart trafia w naprawdę pustą chwilę zamiast czekać na
+kogoś, kogo dawno nie ma.
 
 **Pułapka, na którą się nadziałem.** Pierwsza wersja licznika liczyła w górę na
 połączeniu i w dół na rozłączeniu. Przy jednej żywej sesji pokazywała **-1**:
@@ -153,7 +175,8 @@ nieznanego nie zbija stanu poniżej zera.
 | `REPLIKA_ODSTEP` | sekundy między kolejnymi replikami (domyślnie 90) |
 | `REPLIKA_SONDA` | co ile sekund liczymy odcisk (domyślnie 15) |
 | `REPLIKA_ROZBIEG` | zwłoka po starcie, zanim zaczniemy pilnować (domyślnie 60) |
-| `REPLIKA_CIERPLIWOSC` | ile sekund czekamy, aż pracujący skończą (domyślnie 300) |
+| `REPLIKA_CIERPLIWOSC` | do ilu sekund czekamy na spokojną chwilę (domyślnie 300) |
+| `REPLIKA_BEZCZYNNOSC` | po ilu sekundach bez czynności chwila jest spokojna (domyślnie 45) |
 
 `trzy-repliki.sh` ustawia je sam.
 

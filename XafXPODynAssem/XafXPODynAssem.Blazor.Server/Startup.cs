@@ -199,6 +199,33 @@ namespace XafXPODynAssem.Blazor.Server
                 endpoints.MapHub<SchemaUpdateHub>("/schemaUpdateHub");
                 endpoints.MapFallbackToPage("/_Host");
                 endpoints.MapControllers();
+
+                // Wylogowanie po bezczynnosci konczy sie tutaj. Samo skasowanie
+                // ciasteczka w przegladarce nie wystarcza: sesja XAF zyje po stronie
+                // serwera i trzeba ja zamknac jawnie. Wzorzec sprawdzony w HIS.
+                endpoints.MapGet("/Logout", async context =>
+                {
+                    try
+                    {
+                        var dostawca = context.RequestServices.GetService<IXafApplicationProvider>();
+                        dostawca?.GetApplication()?.LogOff();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Wylogowanie ma sie udac nawet wtedy, gdy sesja XAF jest juz
+                        // rozsypana — inaczej czlowiek utknalby zalogowany na stale.
+                        Console.WriteLine($"[Logout] LogOff nieudany, czyszcze ciasteczka mimo to: {ex.Message}");
+                    }
+
+                    context.Response.Cookies.Delete(".AspNetCore.Cookies");
+                    context.Response.Cookies.Delete(".AspNetCore.Identity.Application");
+                    foreach (var ciastko in context.Request.Cookies.Keys)
+                        if (ciastko.StartsWith(".AspNetCore.Antiforgery", StringComparison.Ordinal))
+                            context.Response.Cookies.Delete(ciastko);
+
+                    context.Response.Redirect("/LoginPage");
+                    await Task.CompletedTask;
+                });
             });
 
             // Wire RestartService for graceful shutdown

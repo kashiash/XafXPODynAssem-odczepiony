@@ -35,6 +35,9 @@ namespace XafXPODynAssem.Blazor.Server.Services
             kontekst.Response.Headers["X-Obwody"] = CircuitHandlerProxy.ZywePolaczenia.ToString();
             if (ReplicaSyncService.Wygaszamy) kontekst.Response.Headers["X-Wygaszanie"] = "1";
 
+            if (kontekst.Request.Path.Equals("/replika/puls", StringComparison.OrdinalIgnoreCase))
+                return Puls(kontekst);
+
             if (ReplicaSyncService.Wygaszamy && ZaczynaPrace(kontekst))
             {
                 kontekst.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
@@ -42,6 +45,25 @@ namespace XafXPODynAssem.Blazor.Server.Services
                 return Task.CompletedTask;
             }
             return _dalej(kontekst);
+        }
+
+        /// <summary>
+        /// Tetno strony. Przegladarka melduje, czy czlowiek cos robi, i dowiaduje sie,
+        /// ile czasu zostalo do restartu repliki.
+        ///
+        /// Osobny kanal jest konieczny, bo praca w Blazorze plynie gniazdem, ktorego
+        /// serwer HTTP nie widzi. Bez tego replika nie odroznia osoby wpisujacej dane
+        /// od karty otwartej od rana, w ktorej nikt nic nie robi.
+        /// </summary>
+        private static Task Puls(HttpContext kontekst)
+        {
+            if (kontekst.Request.Query["a"] == "1") ReplicaSyncService.ZglosCzynnosc();
+
+            kontekst.Response.ContentType = "application/json";
+            kontekst.Response.Headers["Cache-Control"] = "no-store";
+            var wygaszanie = ReplicaSyncService.Wygaszamy ? "true" : "false";
+            return kontekst.Response.WriteAsync(
+                $"{{\"wygaszanie\":{wygaszanie},\"zostalo\":{ReplicaSyncService.SekundDoRestartu}}}");
         }
 
         private static bool ZaczynaPrace(HttpContext kontekst)
@@ -54,6 +76,8 @@ namespace XafXPODynAssem.Blazor.Server.Services
             if (sciezka.StartsWith("/_framework", StringComparison.OrdinalIgnoreCase)) return false;
             if (sciezka.StartsWith("/_content", StringComparison.OrdinalIgnoreCase)) return false;
             if (sciezka.StartsWith("/schemaUpdateHub", StringComparison.OrdinalIgnoreCase)) return false;
+            // wylogowanie musi dzialac takze na wygaszanej replice
+            if (sciezka.StartsWith("/Logout", StringComparison.OrdinalIgnoreCase)) return false;
 
             return true;
         }
